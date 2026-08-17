@@ -453,19 +453,7 @@ const CODE_FILL_BLANKS = {
 };
 Object.assign(FILL_BLANKS, CODE_FILL_BLANKS);
 
-// The printed PDF keeps some 1.2/3.1 answer areas inside DOCX cells instead
-// of literal underscore characters. Use scoring triggers as those slots so
-// every exam task remains available in the same fill-in workflow.
-for (const task of TASKS) {
-  if (FILL_BLANKS[task.id]) continue;
-  FILL_BLANKS[task.id] = task.triggers.map((trigger, index) => ({
-    clue: `资料关键空 ${index + 1} · ${trigger}`,
-    answer: trigger,
-    generated: true,
-    match: "contains"
-  }));
-}
-const FILL_TASK_IDS = new Set(TASKS.map((task) => task.id));
+const SOURCE_DATA = (typeof window !== "undefined" && window.SOURCE_BLANKS) || {};
 
 const ACTION_CARDS = [
   ["2.1 数据处理", "读 → 看 → 清 → 删 → 变 → 选 → 分 → 存", "看到缺失、重复、标准化、目标列、测试集 20% 就触发。"],
@@ -515,16 +503,30 @@ function answerMatches(input, expected) {
   return accepted.some((answer) => value === normalizeAnswer(answer));
 }
 function blankMatches(input, blank) {
+  const acceptedAnswers = [blank?.answer, ...(blank?.accepted || [])].filter(Boolean);
   if (blank?.match === "contains") {
     const value = normalizeAnswer(input);
     if (!value) return false;
-    const accepted = Array.isArray(blank.answer) ? blank.answer : [blank.answer];
-    return accepted.some((answer) => value.includes(normalizeAnswer(answer)));
+    return acceptedAnswers.some((answer) => value.includes(normalizeAnswer(answer)));
   }
-  return answerMatches(input, blank?.answer);
+  return answerMatches(input, acceptedAnswers);
 }
-function hasFillMode(task) { return Boolean(task && FILL_TASK_IDS.has(task.id)); }
+function hasFillMode(task) { return Boolean(sourceBlocks(task)); }
 function fillTaskCount() { return TASKS.filter((task) => hasFillMode(task)).length; }
+function sourceBlocks(task) { return SOURCE_DATA[task?.id]?.blocks || null; }
+function fillBlanks(task) {
+  const source = sourceBlocks(task);
+  if (source) {
+    return source.flatMap((block) => block.answers.map((answer, slot) => ({
+      answer,
+      accepted: block.accepted?.[slot] || [],
+      clue: block.text,
+      source: true,
+      cell: Boolean(block.cell)
+    })));
+  }
+  return [];
+}
 function compactGuideTitle(value) { return String(value).replace(/\s+/g, "").trim(); }
 function cleanGuideBlock(value) {
   const watermark = /^[复制止禁校学训培业职顿普尼海上]$/;
@@ -618,7 +620,7 @@ function render() {
   else root.innerHTML = renderDashboard();
   if (currentRoute === "practice" && practiceMode === "fill") {
     const fillCopy = root.querySelector(".view-heading p");
-    const blankCount = root.querySelectorAll(".blank-input").length;
+    const blankCount = root.querySelectorAll(".blank-input, .source-input").length;
     if (fillCopy && blankCount) fillCopy.textContent = `每空先独立作答，本题共 ${blankCount} 空，提交后逐项批改。`;
   }
   bindEvents();
@@ -668,8 +670,8 @@ function renderModules() {
 
 function renderModeBar(task) {
   const fillAvailable = hasFillMode(task);
-  const generated = fillAvailable && FILL_BLANKS[task.id]?.some((blank) => blank.generated);
-  return `<div class="practice-mode-bar"><span class="mode-label">作答方式</span><button class="mode-button ${practiceMode === "recall" ? "active" : ""}" data-practice-mode="recall">整题回忆</button>${fillAvailable ? `<button class="mode-button ${practiceMode === "fill" ? "active" : ""}" data-practice-mode="fill">逐空填答</button>` : `<button class="mode-button disabled" disabled>逐空填答</button>`}<span class="mode-note">${generated ? "本题按资料代码 / 评分点拆空" : "本题按资料下划线逐空批改"}</span></div>`;
+  const source = Boolean(sourceBlocks(task));
+  return `<div class="practice-mode-bar"><span class="mode-label">作答方式</span><button class="mode-button ${practiceMode === "recall" ? "active" : ""}" data-practice-mode="recall">整题回忆</button>${fillAvailable ? `<button class="mode-button ${practiceMode === "fill" ? "active" : ""}" data-practice-mode="fill">逐空填答</button>` : `<button class="mode-button disabled" disabled>逐空填答</button>`}<span class="mode-note">${source ? "原题空位已嵌入素材原文" : "本题按资料空位逐空批改"}</span></div>`;
 }
 
 function renderSelfRate() {
@@ -681,9 +683,19 @@ function renderRecallPractice(task, state) {
 }
 
 function renderFillPractice(task, state) {
-  const blanks = FILL_BLANKS[task.id] || [];
-  const generated = blanks.some((blank) => blank.generated);
-  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>逐空填写 · 共 ${blanks.length} 空</strong><span>${generated ? "按资料中的代码、文件名和评分点填写；提交后按关键内容批改。" : "先按考试记忆填写，提交后显示每空对错和参考答案。"}</span></div><div class="blank-list">${blanks.map((blank, index) => { const longAnswer = (Array.isArray(blank.answer) ? blank.answer[0] : blank.answer).length > 32; const control = longAnswer ? `<textarea class="blank-input" data-blank-input="${index}" rows="3" placeholder="填写第 ${index + 1} 空"></textarea>` : `<input class="blank-input" data-blank-input="${index}" placeholder="填写第 ${index + 1} 空" autocomplete="off" />`; return `<article class="blank-item"><div class="blank-number">${index + 1}</div><div class="blank-body"><div class="blank-clue">${escapeHtml(blank.clue)}</div>${control}<div class="blank-hint">${generated ? "完整代码可直接粘贴，包含该关键点即可。" : "答案按原意填写，标点和空格不影响判定。"}</div></div></article>`; }).join("")}</div><div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">只看一个提示</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>逐空参考答案</h3><div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong>${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</strong></div>`).join("")}</div><div class="trigger-list">${task.triggers.map((trigger) => `<span class="trigger">${escapeHtml(trigger)}</span>`).join("")}</div>${renderSelfRate()}</div></div>`;
+  const blanks = fillBlanks(task);
+  const source = SOURCE_DATA[task.id];
+  const sourceMarkup = source ? `<div class="source-origin">素材库原题 · ${escapeHtml(source.sourceFile)}</div><div class="source-code">${source.blocks.map((block, blockIndex) => {
+    const offset = source.blocks.slice(0, blockIndex).reduce((sum, item) => sum + item.answers.length, 0);
+    const text = escapeHtml(block.text).replace(/\{\{(\d+)\}\}/g, (_, localSlot) => {
+      const globalIndex = offset + Number(localSlot);
+      const answer = block.answers[Number(localSlot)] || "";
+      const longAnswer = answer.length > 48 || answer.includes("\n");
+      return longAnswer ? `<textarea class="source-input source-long" data-blank-input="${globalIndex}" rows="3" placeholder="第 ${globalIndex + 1} 空"></textarea>` : `<input class="source-input" data-blank-input="${globalIndex}" placeholder="第 ${globalIndex + 1} 空" autocomplete="off" />`;
+    });
+    return `<div class="source-line ${block.answers.length ? "has-blank" : ""} ${block.cell ? "source-cell" : ""}">${text}</div>`;
+  }).join("")}</div>` : `<div class="blank-list">${blanks.map((blank, index) => { const answer = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer; const control = answer.length > 32 ? `<textarea class="blank-input" data-blank-input="${index}" rows="3" placeholder="填写第 ${index + 1} 空"></textarea>` : `<input class="blank-input" data-blank-input="${index}" placeholder="填写第 ${index + 1} 空" autocomplete="off" />`; return `<article class="blank-item"><div class="blank-number">${index + 1}</div><div class="blank-body"><div class="blank-clue">${escapeHtml(blank.clue)}</div>${control}</div></article>`; }).join("")}</div>`;
+  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>按素材原题逐空填写 · 共 ${blanks.length} 空</strong><span>输入框只放在素材库原下划线或空白单元格的位置；提交后按对应原答案批改。</span></div>${sourceMarkup}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">看原题位置</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>原题空位参考答案</h3><div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong>${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</strong></div>`).join("")}</div>${renderSelfRate()}</div></div>`;
 }
 
 function renderPractice() {
@@ -694,7 +706,7 @@ function renderPractice() {
   const progressLine = `${currentTaskIndex + 1} / ${activeSessionTasks.length}`;
   const fillActive = practiceMode === "fill" && hasFillMode(task);
   const unsupportedNotice = practiceMode === "fill" && !hasFillMode(task) ? `<div class="mode-unavailable">本题没有独立下划线空，已切换为整题 / 交付模拟。</div>` : "";
-  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? "按考试逐空填写" : "先写，再展开参考骨架"}</h2><p>${fillActive ? "每空先独立作答，提交后按 5 个得分点批改。" : "不要追求逐字一致；能按触发词复现步骤、输出和验收指标，才算掌握。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">换一组 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>训练筛选</h3><div class="filter-stack"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部题目 <span style="float:right">${TASKS.length}</span></button><button class="filter-button ${currentFilter === "fill" ? "active" : ""}" data-filter="fill">填空题 <span style="float:right">${fillTaskCount()}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">本轮进度</span><strong>${progressLine}</strong><p>自评记录会进入本机进度，不会上传到任何网站。</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
+  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? "按素材原题逐空填写" : "先写，再展开参考骨架"}</h2><p>${fillActive ? "每空先独立作答，提交后按对应原答案逐项批改。" : "不要追求逐字一致；能按触发词复现步骤、输出和验收指标，才算掌握。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">换一组 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>训练筛选</h3><div class="filter-stack"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部题目 <span style="float:right">${TASKS.length}</span></button><button class="filter-button ${currentFilter === "fill" ? "active" : ""}" data-filter="fill">填空题 <span style="float:right">${fillTaskCount()}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">本轮进度</span><strong>${progressLine}</strong><p>自评记录会进入本机进度，不会上传到任何网站。</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
 }
 
 function formatTimer(seconds) { const min = Math.floor(seconds / 60).toString().padStart(2, "0"); const sec = (seconds % 60).toString().padStart(2, "0"); return `${min}:${sec}`; }
@@ -723,7 +735,7 @@ function startTimer() {
 }
 function gradeFill() {
   const task = activeSessionTasks[currentTaskIndex];
-  const blanks = FILL_BLANKS[task?.id] || [];
+  const blanks = fillBlanks(task);
   const root = document.getElementById("fill-practice");
   const result = document.getElementById("fill-results");
   if (!root || !result || !blanks.length) return;
@@ -737,7 +749,7 @@ function gradeFill() {
     input?.classList.toggle("correct", correct);
     input?.classList.toggle("incorrect", !correct);
     const expected = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer;
-    return `<div class="fill-result-row ${correct ? "correct" : "incorrect"}"><span class="fill-result-badge">${correct ? "正确" : "需复习"}</span><div><strong>第 ${index + 1} 空</strong><p>${correct ? (blank.generated ? "关键内容命中" : "答案要点匹配") : `参考答案：${escapeHtml(expected)}`}</p></div></div>`;
+    return `<div class="fill-result-row ${correct ? "correct" : "incorrect"}"><span class="fill-result-badge">${correct ? "正确" : "需复习"}</span><div><strong>第 ${index + 1} 空</strong><p>${correct ? "原题空位答案匹配" : `原题答案：${escapeHtml(expected)}`}</p></div></div>`;
   });
   result.innerHTML = `<div class="fill-score"><strong>${score} / ${blanks.length}</strong><span>${score === blanks.length ? `本题 ${blanks.length} 个空全部命中` : `还有 ${blanks.length - score} 个空需要复做`}</span></div>${rows.join("")}`;
   result.classList.add("show");
@@ -784,7 +796,7 @@ function bindEvents() {
   }));
   const reveal = document.getElementById("reveal-answer"); if (reveal) reveal.addEventListener("click", revealAnswer);
   const grade = document.getElementById("grade-fill"); if (grade) grade.addEventListener("click", gradeFill);
-  const hint = document.getElementById("show-one-hint"); if (hint) hint.addEventListener("click", () => { const task = activeSessionTasks[currentTaskIndex]; showToast(`提示：${task.triggers[0]} → ${task.triggers[1]}`); });
+  const hint = document.getElementById("show-one-hint"); if (hint) hint.addEventListener("click", () => { const task = activeSessionTasks[currentTaskIndex]; const first = fillBlanks(task)[0]; showToast(first ? `原题位置：${first.clue}` : `提示：${task.triggers[0]} → ${task.triggers[1]}`); });
   document.querySelectorAll("[data-rating]").forEach((button) => button.addEventListener("click", () => rateTask(button.dataset.rating)));
   const prev = document.getElementById("prev-question"); if (prev) prev.addEventListener("click", () => nextQuestion(-1));
   const next = document.getElementById("next-question"); if (next) next.addEventListener("click", () => nextQuestion(1));
