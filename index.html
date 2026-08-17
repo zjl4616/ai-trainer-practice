@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>AI训练师 · 15天实操通关台</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark">AI</span>
+          <div>
+            <strong>实操通关台</strong>
+            <span>人工智能训练师 · 三级</span>
+          </div>
+        </div>
+
+        <div class="exam-chip">
+          <span class="eyebrow">目标考试</span>
+          <strong>2026.08.29</strong>
+          <span id="sidebar-countdown">距考试计算中</span>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" data-route="dashboard"><span class="nav-icon">01</span><span>总览</span></button>
+          <button class="nav-item" data-route="practice"><span class="nav-icon">02</span><span>开始训练</span></button>
+          <button class="nav-item" data-route="modules"><span class="nav-icon">03</span><span>六大模块</span></button>
+          <button class="nav-item" data-route="mistakes"><span class="nav-icon">04</span><span>错题复盘</span><span class="nav-count" id="mistake-count">0</span></button>
+          <button class="nav-item" data-route="plan"><span class="nav-icon">05</span><span>15天计划</span></button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="local-note"><span class="status-dot"></span><span>进度保存在本机</span></div>
+          <button class="ghost-button" id="reset-progress">清空本机进度</button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <span class="eyebrow" id="top-eyebrow">今日训练 · 2026年8月17日</span>
+            <h1 id="page-title">把答案变成动作</h1>
+          </div>
+          <div class="top-actions">
+            <button class="outline-button" data-route="plan">查看冲刺计划 <span aria-hidden="true">↗</span></button>
+            <button class="primary-button" data-route="practice">开始一轮训练 <span aria-hidden="true">→</span></button>
+          </div>
+        </header>
+
+        <div id="view-root"></div>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
