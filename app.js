@@ -454,6 +454,7 @@ const CODE_FILL_BLANKS = {
 Object.assign(FILL_BLANKS, CODE_FILL_BLANKS);
 
 const SOURCE_DATA = (typeof window !== "undefined" && window.SOURCE_BLANKS) || {};
+const TASK_ASSETS = (typeof window !== "undefined" && window.TASK_ASSETS) || {};
 
 const ACTION_CARDS = [
   ["2.1 数据处理", "读 → 看 → 清 → 删 → 变 → 选 → 分 → 存", "看到缺失、重复、标准化、目标列、测试集 20% 就触发。"],
@@ -579,6 +580,53 @@ function renderGuideDetails(task) {
   const section = guideSections[task.id];
   if (!section) return `<div class="guide-loading">正在读取备考指南原题全文……</div>`;
   return `<details class="source-details"><summary>查看备考指南原题全文（含空格、文件名和评分要求）</summary><div class="source-content">${escapeHtml(section.question)}</div></details><details class="source-details reference"><summary>查看备考指南参考答案原文</summary><div class="source-content">${escapeHtml(section.reference)}</div></details>`;
+}
+
+function assetKindLabel(kind) {
+  return ({ csv: "CSV", xlsx: "XLSX", notebook: "IPYNB", docx: "DOCX", image: "图片", model: "ONNX", text: "TXT", archive: "ZIP" }[kind] || "文件");
+}
+function assetFileName(asset) { return asset.name.split("/").pop(); }
+function renderTaskAssets(task) {
+  const assets = TASK_ASSETS[task.id] || [];
+  if (!assets.length) return "";
+  const rows = assets.map((asset, index) => {
+    const preview = asset.kind === "csv" ? `<button class="asset-preview-button" data-preview-csv="${escapeHtml(asset.href)}" data-preview-id="asset-preview-${task.id}-${index}">预览表格</button>` : "";
+    const external = asset.external ? ` target="_blank" rel="noreferrer"` : "";
+    const download = asset.external ? "" : " download";
+    const note = asset.size ? `<small>${escapeHtml(asset.size)}</small>` : "";
+    return `<div class="asset-row"><span class="asset-kind">${assetKindLabel(asset.kind)}</span><div class="asset-copy"><strong>${escapeHtml(asset.label || assetFileName(asset))}</strong><small>${escapeHtml(assetFileName(asset))}</small>${note}</div><div class="asset-actions"><a class="asset-link" href="${escapeHtml(asset.href)}"${external}${download}>下载 <span aria-hidden="true">↧</span></a>${preview}</div><div class="csv-preview" id="asset-preview-${task.id}-${index}" hidden></div></div>`;
+  }).join("");
+  return `<section class="asset-panel"><div class="asset-panel-head"><div><span class="eyebrow">题目资料</span><h3>先下载或打开原始文件再操作</h3></div><span class="asset-count">${assets.length} 个文件</span></div><p class="asset-panel-note">CSV 可在页面内快速预览；XLSX、DOCX、IPYNB、图片和 ONNX 下载后用本地工具处理，文件名保持与素材库一致。</p><div class="asset-list">${rows}</div></section>`;
+}
+function parseCsvLine(line) {
+  const cells = []; let cell = ""; let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"' && line[i + 1] === '"' && quoted) { cell += '"'; i += 1; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) { cells.push(cell); cell = ""; }
+    else cell += char;
+  }
+  cells.push(cell);
+  return cells;
+}
+async function previewCsv(button) {
+  const target = document.getElementById(button.dataset.previewId);
+  if (!target) return;
+  if (!target.hidden) { target.hidden = true; return; }
+  target.hidden = false;
+  target.innerHTML = "<span class=\"csv-loading\">正在读取前 20 行……</span>";
+  try {
+    const response = await fetch(button.dataset.previewCsv, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((line) => line.trim() !== "").slice(0, 21);
+    if (!lines.length) throw new Error("文件为空");
+    const table = lines.map((line, row) => `<tr>${parseCsvLine(line).slice(0, 12).map((cell) => `<${row === 0 ? "th" : "td"}>${escapeHtml(cell)}</${row === 0 ? "th" : "td"}>`).join("")}</tr>`).join("");
+    target.innerHTML = `<div class="csv-caption">前 ${Math.max(0, lines.length - 1)} 行 · 最多显示 12 列</div><div class="csv-table-wrap"><table>${table}</table></div>`;
+  } catch (error) {
+    target.innerHTML = `<span class="csv-error">表格预览失败：${escapeHtml(error.message || "读取失败")}，请直接下载文件。</span>`;
+  }
 }
 async function loadGuide() {
   try {
@@ -706,7 +754,7 @@ function renderPractice() {
   const progressLine = `${currentTaskIndex + 1} / ${activeSessionTasks.length}`;
   const fillActive = practiceMode === "fill" && hasFillMode(task);
   const unsupportedNotice = practiceMode === "fill" && !hasFillMode(task) ? `<div class="mode-unavailable">本题没有独立下划线空，已切换为整题 / 交付模拟。</div>` : "";
-  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? "按素材原题逐空填写" : "先写，再展开参考骨架"}</h2><p>${fillActive ? "每空先独立作答，提交后按对应原答案逐项批改。" : "不要追求逐字一致；能按触发词复现步骤、输出和验收指标，才算掌握。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">换一组 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>训练筛选</h3><div class="filter-stack"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部题目 <span style="float:right">${TASKS.length}</span></button><button class="filter-button ${currentFilter === "fill" ? "active" : ""}" data-filter="fill">填空题 <span style="float:right">${fillTaskCount()}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">本轮进度</span><strong>${progressLine}</strong><p>自评记录会进入本机进度，不会上传到任何网站。</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
+  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? "按素材原题逐空填写" : "先写，再展开参考骨架"}</h2><p>${fillActive ? "每空先独立作答，提交后按对应原答案逐项批改。" : "不要追求逐字一致；能按触发词复现步骤、输出和验收指标，才算掌握。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">换一组 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>训练筛选</h3><div class="filter-stack"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部题目 <span style="float:right">${TASKS.length}</span></button><button class="filter-button ${currentFilter === "fill" ? "active" : ""}" data-filter="fill">填空题 <span style="float:right">${fillTaskCount()}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">本轮进度</span><strong>${progressLine}</strong><p>自评记录会进入本机进度，不会上传到任何网站。</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${renderTaskAssets(task)}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
 }
 
 function formatTimer(seconds) { const min = Math.floor(seconds / 60).toString().padStart(2, "0"); const sec = (seconds % 60).toString().padStart(2, "0"); return `${min}:${sec}`; }
@@ -796,6 +844,7 @@ function bindEvents() {
   }));
   const reveal = document.getElementById("reveal-answer"); if (reveal) reveal.addEventListener("click", revealAnswer);
   const grade = document.getElementById("grade-fill"); if (grade) grade.addEventListener("click", gradeFill);
+  document.querySelectorAll("[data-preview-csv]").forEach((button) => button.addEventListener("click", () => previewCsv(button)));
   const hint = document.getElementById("show-one-hint"); if (hint) hint.addEventListener("click", () => { const task = activeSessionTasks[currentTaskIndex]; const first = fillBlanks(task)[0]; showToast(first ? `原题位置：${first.clue}` : `提示：${task.triggers[0]} → ${task.triggers[1]}`); });
   document.querySelectorAll("[data-rating]").forEach((button) => button.addEventListener("click", () => rateTask(button.dataset.rating)));
   const prev = document.getElementById("prev-question"); if (prev) prev.addEventListener("click", () => nextQuestion(-1));
