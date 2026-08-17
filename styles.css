@@ -155,7 +155,7 @@ h3 { font-size: 15px; }
 .module-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; padding-top: 13px; border-top: 1px solid #edf3f1; }
 .module-card-footer small { color: var(--muted); font-size: 10px; }
 
-.practice-layout { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 16px; align-items: start; }
+.practice-layout { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
 .practice-sidebar { padding: 15px; position: sticky; top: 18px; }
 .practice-sidebar h3 { margin-bottom: 11px; }
 .filter-stack { display: grid; gap: 5px; }
@@ -163,7 +163,7 @@ h3 { font-size: 15px; }
 .session-card { margin-top: 17px; padding-top: 15px; border-top: 1px solid var(--line); }
 .session-card strong { display: block; margin-top: 7px; font-size: 14px; }
 .session-card p { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.question-panel { padding: 22px; }
+.question-panel { padding: 22px; min-width: 0; }
 .practice-mode-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: -8px 0 14px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
 .mode-label { color: var(--muted); font-size: 11px; font-weight: 750; margin-right: 2px; }
 .mode-button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); font-size: 11px; font-weight: 750; }
@@ -184,10 +184,20 @@ h3 { font-size: 15px; }
 .response-box { width: 100%; min-height: 126px; margin-top: 8px; padding: 13px; resize: vertical; border: 1px solid var(--line); border-radius: 7px; outline: none; color: var(--ink); background: #fff; font-size: 12px; line-height: 1.65; }
 .response-box:focus { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(15,118,110,.09); }
 .mode-unavailable { margin-top: 16px; padding: 10px 12px; border: 1px dashed #e7c8ae; border-radius: 7px; background: var(--orange-soft); color: #8a6048; font-size: 11px; }
-.fill-practice { margin-top: 18px; }
+.fill-practice { margin-top: 18px; min-width: 0; }
 .fill-intro { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 13px 14px; border-left: 3px solid var(--orange); background: var(--orange-soft); }
 .fill-intro strong { color: #7b4c2d; font-size: 13px; }
 .fill-intro span { color: #8a6048; font-size: 11px; }
+.source-origin { margin-top: 11px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.source-code { max-width: 100%; max-height: 720px; min-width: 0; overflow: auto; margin-top: 7px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: #fbfdfd; color: #40585d; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11px; line-height: 1.75; }
+.source-line { min-width: max-content; white-space: pre-wrap; overflow-wrap: anywhere; }
+.source-line.has-blank { margin: 3px -5px; padding: 3px 5px; border-left: 2px solid #e3b08b; background: #fffaf5; }
+.source-line.source-cell { white-space: pre-wrap; font-family: inherit; }
+.source-input { width: 138px; max-width: 100%; margin: 0 3px; padding: 4px 6px; border: 1px solid #cfddd9; border-radius: 4px; outline: none; color: var(--ink); background: #fff; font: inherit; font-size: 11px; line-height: 1.45; vertical-align: baseline; }
+.source-input:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(15,118,110,.1); }
+.source-input.source-long { display: inline-block; width: min(510px, 90vw); min-height: 58px; vertical-align: top; resize: vertical; }
+.source-input.correct { border-color: #5da77e; background: #f2fbf5; }
+.source-input.incorrect { border-color: #d58b70; background: #fff7f2; }
 .blank-list { display: grid; gap: 9px; margin-top: 11px; }
 .blank-item { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
 .blank-number { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 6px; background: var(--blue-soft); color: var(--blue); font-size: 11px; font-weight: 800; }
