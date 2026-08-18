@@ -455,6 +455,7 @@ Object.assign(FILL_BLANKS, CODE_FILL_BLANKS);
 
 const SOURCE_DATA = (typeof window !== "undefined" && window.SOURCE_BLANKS) || {};
 const TASK_ASSETS = (typeof window !== "undefined" && window.TASK_ASSETS) || {};
+const SOURCE_ANSWER_NOTES = (typeof window !== "undefined" && window.SOURCE_ANSWER_NOTES) || {};
 
 const ACTION_CARDS = [
   ["2.1 数据处理", "读 → 看 → 清 → 删 → 变 → 选 → 分 → 存", "看到缺失、重复、标准化、目标列、测试集 20% 就触发。"],
@@ -534,6 +535,34 @@ function fillBlanks(task) {
     })));
   }
   return [];
+}
+function sourceAnswerNote(task) { return SOURCE_ANSWER_NOTES[task?.id] || null; }
+function extraChecks(task) { return sourceAnswerNote(task)?.checks || []; }
+function renderSourceNote(task) {
+  const note = sourceAnswerNote(task);
+  if (!note) return "";
+  const label = note.level === "missing" ? "补充要求" : note.level === "conflict" ? "资料冲突" : note.level === "ocr" ? "原资料校正" : "交付提醒";
+  return `<div class="source-note source-note-${escapeHtml(note.level || "info")}"><strong>资料核验 · ${label}：${escapeHtml(note.title)}</strong><span>${escapeHtml(note.body)}</span></div>`;
+}
+function renderSupplementChecks(task) {
+  const checks = extraChecks(task);
+  if (!checks.length) return "";
+  return `<section class="supplement-checks"><div class="supplement-head"><strong>题面补充检查 · 不计入原题空位数</strong><span>必须完成，但参考 Notebook 没有留下对应下划线</span></div>${checks.map((check, index) => `<label class="supplement-row"><span>${index + 1}. ${escapeHtml(check.clue)}</span><input class="supplement-input" data-extra-input="${index}" placeholder="填写特征名或代码" autocomplete="off" /></label>`).join("")}</section>`;
+}
+function renderExactReference(task) {
+  const source = sourceBlocks(task);
+  const section = guideSections[task.id];
+  if (!source && !section) return "";
+  const sourceMarkup = source ? `<div class="exact-reference-label">按原题空位回填后的代码/答题卷；练习与批改以此核对版和下载的原始素材为准，下面的指南全文仅用于追溯原文。</div><div class="exact-reference-content">${source.map((block) => {
+    let line = escapeHtml(block.text);
+    block.answers.forEach((answer, slot) => {
+      const value = Array.isArray(answer) ? answer[0] : answer;
+      line = line.replace(`{{${slot}}}`, `<mark>${escapeHtml(value)}</mark>`);
+    });
+    return `<div class="exact-reference-line">${line || "&nbsp;"}</div>`;
+  }).join("")}</div>` : "";
+  const guideMarkup = section?.reference ? `<details class="guide-reference-inner"><summary>备考指南参考答案全文</summary><pre>${escapeHtml(section.reference)}</pre></details>` : "";
+  return `<details class="exact-reference"><summary>展开核对版完整参考答案（以素材库为准）</summary>${sourceMarkup}${guideMarkup}</details>`;
 }
 function compactGuideTitle(value) { return String(value).replace(/\s+/g, "").trim(); }
 function cleanGuideBlock(value) {
@@ -990,7 +1019,7 @@ function renderSelfRate() {
 }
 
 function renderRecallPractice(task, state) {
-  return `<label class="response-label" for="response-box">现在先写你的步骤 / 口述稿 <span>可以只写关键词，不要看参考</span></label><textarea id="response-box" class="response-box" placeholder="例如：读 → 看 → 清 → 删 → 变 → 选 → 分 → 存，然后补充这道题的字段、指标和交付文件……"></textarea><div class="practice-toolbar"><div class="left"><button class="primary-button" id="reveal-answer">检查我的回忆 <span aria-hidden="true">↓</span></button><button class="hint-button" id="show-one-hint">只看一个提示</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="answer-reveal" id="answer-reveal"><h3>参考骨架</h3><p>${task.answer}</p><div class="trigger-list">${task.triggers.map((trigger) => `<span class="trigger">${trigger}</span>`).join("")}</div>${renderSelfRate()}</div>`;
+  return `<label class="response-label" for="response-box">现在先写你的步骤 / 口述稿 <span>可以只写关键词，不要看参考</span></label><textarea id="response-box" class="response-box" placeholder="例如：读 → 看 → 清 → 删 → 变 → 选 → 分 → 存，然后补充这道题的字段、指标和交付文件……"></textarea>${renderSourceNote(task)}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="reveal-answer">检查我的回忆 <span aria-hidden="true">↓</span></button><button class="hint-button" id="show-one-hint">只看一个提示</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="answer-reveal" id="answer-reveal"><h3>参考骨架（用于回忆，不替代原题答案）</h3><p>${task.answer}</p><div class="trigger-list">${task.triggers.map((trigger) => `<span class="trigger">${trigger}</span>`).join("")}</div>${renderExactReference(task)}${renderSelfRate()}</div>`;
 }
 
 function renderFillPractice(task, state) {
@@ -1006,7 +1035,7 @@ function renderFillPractice(task, state) {
     });
     return `<div class="source-line ${block.answers.length ? "has-blank" : ""} ${block.cell ? "source-cell" : ""}">${text}</div>`;
   }).join("")}</div>` : `<div class="blank-list">${blanks.map((blank, index) => { const answer = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer; const control = answer.length > 32 ? `<textarea class="blank-input" data-blank-input="${index}" rows="3" placeholder="填写第 ${index + 1} 空"></textarea>` : `<input class="blank-input" data-blank-input="${index}" placeholder="填写第 ${index + 1} 空" autocomplete="off" />`; return `<article class="blank-item"><div class="blank-number">${index + 1}</div><div class="blank-body"><div class="blank-clue">${escapeHtml(blank.clue)}</div>${control}</div></article>`; }).join("")}</div>`;
-  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>按素材原题逐空填写 · 共 ${blanks.length} 空</strong><span>输入框只放在素材库原下划线或空白单元格的位置；提交后按对应原答案批改。</span></div>${sourceMarkup}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">看原题位置</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>原题空位参考答案</h3><div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong>${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</strong></div>`).join("")}</div>${renderSelfRate()}</div></div>`;
+  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>按素材原题逐空填写 · 共 ${blanks.length} 空</strong><span>输入框只放在素材库原下划线或空白单元格的位置；提交后按核对版答案批改。</span></div>${renderSourceNote(task)}${sourceMarkup}${renderSupplementChecks(task)}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">看原题位置</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>原题空位核对答案</h3><div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong>${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</strong></div>`).join("")}</div>${renderExactReference(task)}${renderSelfRate()}</div></div>`;
 }
 
 function renderPractice() {
@@ -1060,14 +1089,25 @@ function gradeFill() {
     input?.classList.toggle("correct", correct);
     input?.classList.toggle("incorrect", !correct);
     const expected = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer;
-    return `<div class="fill-result-row ${correct ? "correct" : "incorrect"}"><span class="fill-result-badge">${correct ? "正确" : "需复习"}</span><div><strong>第 ${index + 1} 空</strong><p>${correct ? "原题空位答案匹配" : `原题答案：${escapeHtml(expected)}`}</p></div></div>`;
+    return `<div class="fill-result-row ${correct ? "correct" : "incorrect"}"><span class="fill-result-badge">${correct ? "正确" : "需复习"}</span><div><strong>第 ${index + 1} 空</strong><p>${correct ? "核对版答案匹配" : `核对答案：${escapeHtml(expected)}`}</p></div></div>`;
   });
-  result.innerHTML = `<div class="fill-score"><strong>${score} / ${blanks.length}</strong><span>${score === blanks.length ? `本题 ${blanks.length} 个空全部命中` : `还有 ${blanks.length - score} 个空需要复做`}</span></div>${rows.join("")}`;
+  const checks = extraChecks(task);
+  let extraScore = 0;
+  const extraRows = checks.map((check, index) => {
+    const input = root.querySelector(`[data-extra-input="${index}"]`);
+    const correct = blankMatches(input?.value || "", check);
+    if (correct) extraScore += 1;
+    input?.classList.toggle("correct", correct);
+    input?.classList.toggle("incorrect", !correct);
+    return `<div class="fill-result-row ${correct ? "correct" : "incorrect"}"><span class="fill-result-badge">${correct ? "正确" : "需补做"}</span><div><strong>补充 ${index + 1} · ${escapeHtml(check.clue)}</strong><p>${correct ? "题面补充要求匹配" : `建议写：${escapeHtml(check.answer)}`}</p></div></div>`;
+  });
+  const extraSummary = checks.length ? `<div class="supplement-score"><strong>补充检查 ${extraScore} / ${checks.length}</strong><span>${extraScore === checks.length ? "题面额外要求已覆盖" : `还有 ${checks.length - extraScore} 项题面要求需要补做`}</span></div>${extraRows.join("")}` : "";
+  result.innerHTML = `<div class="fill-score"><strong>原题空位 ${score} / ${blanks.length}</strong><span>${score === blanks.length ? `本题 ${blanks.length} 个原题空全部命中` : `还有 ${blanks.length - score} 个原题空需要复做`}</span></div>${rows.join("")}${extraSummary}`;
   result.classList.add("show");
   document.getElementById("answer-reveal")?.classList.add("show");
   document.getElementById("self-rate")?.classList.add("show");
   const button = document.getElementById("grade-fill");
-  if (button) button.innerHTML = `已批改 ${score}/${blanks.length} <span aria-hidden="true">↻</span>`;
+  if (button) button.innerHTML = `已批改 ${score}/${blanks.length}${checks.length ? ` · 补充 ${extraScore}/${checks.length}` : ""} <span aria-hidden="true">↻</span>`;
 }
 function revealAnswer() { const reveal = document.getElementById("answer-reveal"); if (!reveal) return; reveal.classList.add("show"); document.getElementById("self-rate").classList.add("show"); document.getElementById("reveal-answer").textContent = "已展开参考骨架"; }
 function rateTask(rating) {
