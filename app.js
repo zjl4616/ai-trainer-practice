@@ -473,6 +473,13 @@ let timerId = null;
 let remainingSeconds = 20 * 60;
 let guideSections = {};
 let guideError = "";
+let pyodidePromise = null;
+let pythonRunId = 0;
+const pythonMountedFiles = new Map();
+const PYODIDE_VERSION = "0.26.2";
+const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+const PYTHON_CODE_KEY = "ai-trainer-python-code-v1";
+const PYTHON_RUN_KEY = "ai-trainer-python-runs-v1";
 
 function loadProgress() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
@@ -598,6 +605,257 @@ function renderTaskAssets(task) {
   }).join("");
   return `<section class="asset-panel"><div class="asset-panel-head"><div><span class="eyebrow">题目资料</span><h3>先下载或打开原始文件再操作</h3></div><span class="asset-count">${assets.length} 个文件</span></div><p class="asset-panel-note">CSV 可在页面内快速预览；XLSX、DOCX、IPYNB、图片和 ONNX 下载后用本地工具处理，文件名保持与素材库一致。</p><div class="asset-list">${rows}</div></section>`;
 }
+function pythonAssetCandidates(assets) {
+  return assets.filter((asset) => asset.local && ["csv", "xlsx", "text", "image", "archive"].includes(asset.kind));
+}
+function pythonCodeMap() {
+  try { return JSON.parse(localStorage.getItem(PYTHON_CODE_KEY)) || {}; } catch { return {}; }
+}
+function pythonCodeFor(task, assets) {
+  const saved = pythonCodeMap()[task.id];
+  if (typeof saved === "string") return saved;
+  const dataAsset = assets.find((asset) => ["csv", "xlsx"].includes(asset.kind));
+  const lines = [
+    "# " + task.id + " · " + task.title,
+    "# 先点击“加载本题数据”，再运行下面的代码。",
+    "import pandas as pd"
+  ];
+  if (dataAsset) {
+    const filename = JSON.stringify(dataAsset.name);
+    const encoding = task.id === "2.1.4" && dataAsset.kind === "csv" ? ', encoding="gbk"' : "";
+    lines.push(
+      dataAsset.kind === "xlsx" ? "data = pd.read_excel(" + filename + ")" : "data = pd.read_csv(" + filename + encoding + ")",
+      "print(data.head())",
+      "print(data.shape)"
+    );
+  } else {
+    lines.push("print('Python 已连接，可以开始写本题代码。')");
+  }
+  return lines.join("\n");
+}
+function savePythonCode(taskId, code) {
+  const stored = pythonCodeMap();
+  stored[taskId] = code;
+  localStorage.setItem(PYTHON_CODE_KEY, JSON.stringify(stored));
+}
+function pythonRunMap() {
+  try { return JSON.parse(localStorage.getItem(PYTHON_RUN_KEY)) || {}; } catch { return {}; }
+}
+function savePythonRun(taskId, status, output) {
+  const stored = pythonRunMap();
+  stored[taskId] = { status, output: String(output || "").slice(-12000), updatedAt: new Date().toISOString() };
+  localStorage.setItem(PYTHON_RUN_KEY, JSON.stringify(stored));
+}
+function pythonRunFor(taskId) {
+  const run = pythonRunMap()[taskId];
+  return run && typeof run.output === "string" ? run : null;
+}
+function renderPythonLab(task, assets) {
+  if (!assets.some((asset) => ["notebook", "csv", "xlsx"].includes(asset.kind))) return "";
+  const candidates = pythonAssetCandidates(assets);
+  const taskId = escapeHtml(task.id);
+  const code = escapeHtml(pythonCodeFor(task, assets));
+  const candidateNames = candidates.length ? candidates.map((asset) => escapeHtml(assetFileName(asset))).join("、") : "无，可直接上传文件";
+  const lastRun = pythonRunFor(task.id);
+  const lastOutput = escapeHtml(lastRun?.output || "点击“运行 Python”开始检查。");
+  const lastStatus = lastRun ? (lastRun.status === "success" ? "上次运行完成" : "上次运行失败") : "尚未运行";
+  return '<section class="python-lab" data-python-task="' + taskId + '">' +
+    '<div class="python-lab-head"><div><span class="eyebrow">Python 实操</span><h3>边运行，边检查结果</h3></div><span class="python-runtime-badge">浏览器本地</span></div>' +
+    '<p class="python-lab-note">首次运行会加载 Python 运行时；数据不上传。把代码输出和生成文件当作本题的检查记录。</p>' +
+    '<div class="python-toolbar">' +
+      '<button class="python-button primary" type="button" data-python-run="' + taskId + '">运行 Python <span aria-hidden="true">▶</span></button>' +
+      '<button class="python-button" type="button" data-python-load="' + taskId + '">加载本题数据</button>' +
+      '<label class="python-file-button">上传文件<input type="file" multiple data-python-upload="' + taskId + '" accept=".csv,.xlsx,.xls,.txt,.json,.ipynb,.jpg,.jpeg,.png,.zip" /></label>' +
+      '<button class="python-button ghost" type="button" data-python-clear="' + taskId + '">清空输出</button>' +
+      '<button class="python-button ghost" type="button" data-python-reset="' + taskId + '">恢复模板</button>' +
+    '</div>' +
+    '<div class="python-mounted" id="python-mounted-' + taskId + '">本题可挂载素材：' + candidateNames + '</div>' +
+    '<textarea class="python-editor" data-python-editor="' + taskId + '" spellcheck="false" autocapitalize="off" autocomplete="off">' + code + '</textarea>' +
+    '<div class="python-output-head"><strong>运行输出</strong><span data-python-status="' + taskId + '">' + lastStatus + '</span></div>' +
+    '<pre class="python-output" data-python-output="' + taskId + '">' + lastOutput + '</pre>' +
+    '<div class="python-files" data-python-files="' + taskId + '"></div>' +
+  '</section>';
+}
+function pythonStatus(taskId, text, type = "") {
+  const node = document.querySelector("[data-python-status='" + taskId + "']");
+  if (!node) return;
+  node.textContent = text;
+  node.className = type ? "python-status " + type : "python-status";
+}
+function pythonOutput(taskId, text) {
+  const node = document.querySelector("[data-python-output='" + taskId + "']");
+  if (node) node.textContent = text;
+}
+function pythonPath(name) {
+  const safe = String(name).split("/").filter(Boolean).map((part) => part.replace(/\0/g, "_")).join("/");
+  return "/home/pyodide/" + safe;
+}
+function ensurePythonDirectories(pyodide, filePath) {
+  const parts = filePath.split("/").slice(1, -1);
+  let current = "";
+  parts.forEach((part) => {
+    current += "/" + part;
+    try { pyodide.FS.mkdir(current); } catch {}
+  });
+}
+function writePythonFile(pyodide, name, bytes) {
+  const path = pythonPath(name);
+  ensurePythonDirectories(pyodide, path);
+  pyodide.FS.writeFile(path, bytes);
+  pythonMountedFiles.set(name, path);
+}
+async function loadPyodideRuntime(onStatus = () => {}) {
+  if (window.__AI_TRAINER_PYODIDE__) return window.__AI_TRAINER_PYODIDE__;
+  if (!pyodidePromise) {
+    pyodidePromise = new Promise((resolve, reject) => {
+      const start = async () => {
+        try {
+          onStatus("正在启动 Python…");
+          if (!window.loadPyodide) throw new Error("Python 运行时脚本未加载");
+          const pyodide = await window.loadPyodide({ indexURL: PYODIDE_BASE });
+          window.__AI_TRAINER_PYODIDE__ = pyodide;
+          resolve(pyodide);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      const existing = document.querySelector("script[data-pyodide-loader]");
+      if (existing) {
+        if (window.loadPyodide) start();
+        else existing.addEventListener("load", start, { once: true });
+        existing.addEventListener("error", () => reject(new Error("Python 运行时加载失败")), { once: true });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = PYODIDE_BASE + "pyodide.js";
+      script.async = true;
+      script.dataset.pyodideLoader = "true";
+      script.onload = start;
+      script.onerror = () => reject(new Error("Python 运行时加载失败"));
+      document.head.appendChild(script);
+    });
+  }
+  return pyodidePromise;
+}
+async function loadTaskPythonFiles(taskId) {
+  const task = TASKS.find((item) => item.id === taskId);
+  const assets = pythonAssetCandidates(TASK_ASSETS[taskId] || []);
+  if (!task || !assets.length) {
+    pythonStatus(taskId, "请先上传文件", "error");
+    return;
+  }
+  const pyodide = await loadPyodideRuntime((text) => pythonStatus(taskId, text));
+  let loaded = 0;
+  for (const asset of assets) {
+    if (pythonMountedFiles.has(asset.name)) { loaded += 1; continue; }
+    const response = await fetch(asset.href, { cache: "no-store" });
+    if (!response.ok) throw new Error(assetFileName(asset) + " HTTP " + response.status);
+    writePythonFile(pyodide, asset.name, new Uint8Array(await response.arrayBuffer()));
+    loaded += 1;
+  }
+  pythonStatus(taskId, "已挂载 " + loaded + " 个素材", "success");
+  const mounted = document.getElementById("python-mounted-" + taskId);
+  if (mounted) mounted.textContent = "已挂载：" + assets.map((asset) => assetFileName(asset)).join("、");
+}
+async function uploadPythonFiles(taskId, files) {
+  if (!files.length) return;
+  const pyodide = await loadPyodideRuntime((text) => pythonStatus(taskId, text));
+  for (const file of files) writePythonFile(pyodide, file.name, new Uint8Array(await file.arrayBuffer()));
+  pythonStatus(taskId, "已上传 " + files.length + " 个文件", "success");
+  const mounted = document.getElementById("python-mounted-" + taskId);
+  if (mounted) mounted.textContent = "已挂载：" + [...pythonMountedFiles.keys()].join("、");
+}
+function pythonFiles(pyodide, directory = "/home/pyodide") {
+  return pyodide.FS.readdir(directory).filter((name) => name !== "." && name !== "..").flatMap((name) => {
+    const path = directory + "/" + name;
+    try {
+      return (pyodide.FS.stat(path).mode & 0x4000) ? pythonFiles(pyodide, path) : [path];
+    } catch { return []; }
+  });
+}
+function renderPythonFiles(taskId, pyodide) {
+  const node = document.querySelector("[data-python-files='" + taskId + "']");
+  if (!node) return;
+  const files = pythonFiles(pyodide);
+  if (!files.length) { node.innerHTML = ""; return; }
+  node.innerHTML = "<span>当前文件：</span>" + files.map((path) => {
+    const name = path.replace("/home/pyodide/", "");
+    const downloadName = name.replace(/\//g, "__");
+    const blob = new Blob([pyodide.FS.readFile(path)], { type: "application/octet-stream" });
+    const href = URL.createObjectURL(blob);
+    return '<a href="' + href + '" download="' + escapeHtml(downloadName) + '">' + escapeHtml(name) + " 下载</a>";
+  }).join("");
+}
+async function runPython(taskId) {
+  const editor = document.querySelector("[data-python-editor='" + taskId + "']");
+  if (!editor) return;
+  const code = editor.value.trim();
+  if (!code) { pythonStatus(taskId, "代码为空", "error"); return; }
+  savePythonCode(taskId, editor.value);
+  const runToken = ++pythonRunId;
+  const runButton = document.querySelector("[data-python-run='" + taskId + "']");
+  if (runButton) runButton.disabled = true;
+  pythonOutput(taskId, "准备运行…");
+  pythonStatus(taskId, "加载 Python 和代码依赖…");
+  const output = [];
+  const stderr = [];
+  try {
+    const pyodide = await loadPyodideRuntime((text) => pythonStatus(taskId, text));
+    pyodide.setStdout({ batched: (text) => output.push(text) });
+    pyodide.setStderr({ batched: (text) => stderr.push(text) });
+    await pyodide.loadPackagesFromImports(code);
+    if (/\bread_excel\s*\(/.test(code)) {
+      try { await pyodide.loadPackage("openpyxl"); } catch {}
+    }
+    const result = await pyodide.runPythonAsync(code);
+    const stderrText = stderr.join("\n").trim();
+    if (stderrText && !/Pyarrow will become a required dependency/.test(stderrText)) output.push("[stderr] " + stderrText);
+    if (result !== undefined && result !== null) {
+      output.push(String(result));
+      if (result && typeof result.destroy === "function") result.destroy();
+    }
+    if (runToken !== pythonRunId) return;
+    const finalOutput = output.join("\n").trim() || "运行完成，没有文本输出。";
+    pythonOutput(taskId, finalOutput);
+    savePythonRun(taskId, "success", finalOutput);
+    renderPythonFiles(taskId, pyodide);
+    pythonStatus(taskId, "运行完成", "success");
+  } catch (error) {
+    if (runToken !== pythonRunId) return;
+    const stderrText = stderr.join("\n").trim();
+    const diagnostic = stderrText && !/Pyarrow will become a required dependency/.test(stderrText) ? ["[stderr] " + stderrText] : [];
+    const errorText = String(error?.message || error);
+    const encodingHint = /UnicodeDecodeError|codec can't decode/i.test(errorText) ? "提示：这份表格可能是 GBK 编码，可尝试 pd.read_csv('文件名', encoding='gbk')" : "";
+    const finalOutput = output.concat(diagnostic, errorText, encodingHint).filter(Boolean).join("\n").trim();
+    pythonOutput(taskId, finalOutput);
+    savePythonRun(taskId, "error", finalOutput);
+    pythonStatus(taskId, "运行失败", "error");
+  } finally {
+    if (runButton) runButton.disabled = false;
+  }
+}
+function clearPythonOutput(taskId) {
+  pythonOutput(taskId, "点击“运行 Python”开始检查。");
+  pythonStatus(taskId, "尚未运行");
+  const stored = pythonRunMap();
+  delete stored[taskId];
+  localStorage.setItem(PYTHON_RUN_KEY, JSON.stringify(stored));
+  const files = document.querySelector("[data-python-files='" + taskId + "']");
+  if (files) files.innerHTML = "";
+}
+function resetPythonCode(taskId) {
+  const task = TASKS.find((item) => item.id === taskId);
+  const assets = TASK_ASSETS[taskId] || [];
+  const editor = document.querySelector("[data-python-editor='" + taskId + "']");
+  if (!task || !editor) return;
+  const stored = pythonCodeMap();
+  delete stored[taskId];
+  localStorage.setItem(PYTHON_CODE_KEY, JSON.stringify(stored));
+  editor.value = pythonCodeFor(task, assets);
+  savePythonCode(taskId, editor.value);
+  clearPythonOutput(taskId);
+}
+
 function parseCsvLine(line) {
   const cells = []; let cell = ""; let quoted = false;
   for (let i = 0; i < line.length; i += 1) {
@@ -666,6 +924,11 @@ function render() {
   else if (currentRoute === "mistakes") root.innerHTML = renderMistakes();
   else if (currentRoute === "plan") root.innerHTML = renderPlan();
   else root.innerHTML = renderDashboard();
+  if (currentRoute === "practice") {
+    const task = activeSessionTasks[currentTaskIndex] || TASKS[0];
+    const assetPanel = root.querySelector(".asset-panel");
+    if (assetPanel) assetPanel.insertAdjacentHTML("afterend", renderPythonLab(task, TASK_ASSETS[task.id] || []));
+  }
   if (currentRoute === "practice" && practiceMode === "fill") {
     const fillCopy = root.querySelector(".view-heading p");
     const blankCount = root.querySelectorAll(".blank-input, .source-input").length;
@@ -845,6 +1108,12 @@ function bindEvents() {
   const reveal = document.getElementById("reveal-answer"); if (reveal) reveal.addEventListener("click", revealAnswer);
   const grade = document.getElementById("grade-fill"); if (grade) grade.addEventListener("click", gradeFill);
   document.querySelectorAll("[data-preview-csv]").forEach((button) => button.addEventListener("click", () => previewCsv(button)));
+  document.querySelectorAll("[data-python-editor]").forEach((editor) => editor.addEventListener("input", () => savePythonCode(editor.dataset.pythonEditor, editor.value)));
+  document.querySelectorAll("[data-python-run]").forEach((button) => button.addEventListener("click", () => runPython(button.dataset.pythonRun).catch((error) => { pythonOutput(button.dataset.pythonRun, String(error.message || error)); pythonStatus(button.dataset.pythonRun, "运行失败", "error"); })));
+  document.querySelectorAll("[data-python-load]").forEach((button) => button.addEventListener("click", () => loadTaskPythonFiles(button.dataset.pythonLoad).catch((error) => { pythonOutput(button.dataset.pythonLoad, String(error.message || error)); pythonStatus(button.dataset.pythonLoad, "素材加载失败", "error"); })));
+  document.querySelectorAll("[data-python-upload]").forEach((input) => input.addEventListener("change", () => uploadPythonFiles(input.dataset.pythonUpload, [...input.files]).catch((error) => { pythonOutput(input.dataset.pythonUpload, String(error.message || error)); pythonStatus(input.dataset.pythonUpload, "文件加载失败", "error"); })));
+  document.querySelectorAll("[data-python-clear]").forEach((button) => button.addEventListener("click", () => clearPythonOutput(button.dataset.pythonClear)));
+  document.querySelectorAll("[data-python-reset]").forEach((button) => button.addEventListener("click", () => resetPythonCode(button.dataset.pythonReset)));
   const hint = document.getElementById("show-one-hint"); if (hint) hint.addEventListener("click", () => { const task = activeSessionTasks[currentTaskIndex]; const first = fillBlanks(task)[0]; showToast(first ? `原题位置：${first.clue}` : `提示：${task.triggers[0]} → ${task.triggers[1]}`); });
   document.querySelectorAll("[data-rating]").forEach((button) => button.addEventListener("click", () => rateTask(button.dataset.rating)));
   const prev = document.getElementById("prev-question"); if (prev) prev.addEventListener("click", () => nextQuestion(-1));
