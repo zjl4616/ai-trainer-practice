@@ -483,15 +483,204 @@ const PYODIDE_VERSION = "0.26.2";
 const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 const PYTHON_CODE_KEY = "ai-trainer-python-code-v1";
 const PYTHON_RUN_KEY = "ai-trainer-python-runs-v1";
+const AUTH_CONFIG = (typeof window !== "undefined" && window.AI_TRAINER_AUTH) || {};
+const AUTH_TABLE = AUTH_CONFIG.table || "practice_progress";
 
 function loadProgress() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
 }
-function saveProgress() { localStorage.setItem(STORAGE_KEY, JSON.stringify(progress)); }
+let authClient = null;
+let authUser = null;
+let authMode = "login";
+let authBusy = false;
+let authSyncState = "local";
+let authSyncTimer = null;
+let authError = "";
+function authConfigured() { return Boolean(AUTH_CONFIG.provider === "supabase" && AUTH_CONFIG.url && AUTH_CONFIG.anonKey && window.supabase?.createClient); }
+function saveProgress() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+  if (authUser && authClient) {
+    authSyncState = "pending";
+    window.clearTimeout(authSyncTimer);
+    authSyncTimer = window.setTimeout(() => syncProgressToCloud(), 450);
+  }
+  updateSyncStatus();
+}
 function taskState(id) { return progress[id] || { attempts: 0, hard: 0, okay: 0, mastered: 0, last: null, error: "" }; }
 function reviewedCount() { return Object.values(progress).filter((x) => x.attempts > 0).length; }
 function hardCount() { return Object.values(progress).filter((x) => x.hard > 0 && x.mastered < x.hard).length; }
 function moduleTasks(id) { return TASKS.filter((task) => task.module === id); }
+function mergeProgress(local, remote) {
+  const merged = {};
+  const ids = new Set([...Object.keys(local || {}), ...Object.keys(remote || {})]);
+  ids.forEach((id) => {
+    const left = local?.[id] || {};
+    const right = remote?.[id] || {};
+    const leftTime = Date.parse(left.last || "") || 0;
+    const rightTime = Date.parse(right.last || "") || 0;
+    const latest = rightTime > leftTime ? right : left;
+    merged[id] = {
+      attempts: Math.max(left.attempts || 0, right.attempts || 0),
+      hard: Math.max(left.hard || 0, right.hard || 0),
+      okay: Math.max(left.okay || 0, right.okay || 0),
+      mastered: Math.max(left.mastered || 0, right.mastered || 0),
+      last: latest.last || left.last || right.last || null,
+      error: latest.error || left.error || right.error || ""
+    };
+  });
+  return merged;
+}
+function authUserLabel() {
+  const email = authUser?.email || "已登录";
+  return email.length > 22 ? `${email.slice(0, 19)}…` : email;
+}
+function authStatusText() {
+  if (!authConfigured()) return "本机模式";
+  if (!authUser) return "尚未登录";
+  if (authSyncState === "pending") return "同步中…";
+  if (authSyncState === "error") return "同步失败";
+  return "已同步";
+}
+function updateSyncStatus() {
+  const node = document.getElementById("sync-status");
+  if (node) node.innerHTML = `<span class="status-dot ${authUser && authSyncState === "error" ? "status-error" : ""}"></span><span>${authStatusText()}</span>`;
+  renderAuthSlot();
+}
+async function syncProgressToCloud() {
+  if (!authClient || !authUser) return;
+  authSyncState = "pending";
+  updateSyncStatus();
+  const { error } = await authClient.from(AUTH_TABLE).upsert({
+    user_id: authUser.id,
+    progress,
+    updated_at: new Date().toISOString()
+  }, { onConflict: "user_id" });
+  authSyncState = error ? "error" : "synced";
+  if (error) authError = `同步失败：${error.message || "请检查 Supabase 表和权限"}`;
+  updateSyncStatus();
+}
+async function syncProgressFromCloud() {
+  if (!authClient || !authUser) return;
+  authSyncState = "pending";
+  updateSyncStatus();
+  const { data, error } = await authClient.from(AUTH_TABLE).select("progress").eq("user_id", authUser.id).maybeSingle();
+  if (error) {
+    authSyncState = "error";
+    authError = `读取云端进度失败：${error.message || "请检查 Supabase 表和权限"}`;
+    updateSyncStatus();
+    return;
+  }
+  if (data?.progress) {
+    progress = mergeProgress(progress, data.progress);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+    showToast("已合并云端进度");
+  }
+  authSyncState = "synced";
+  updateSyncStatus();
+  render();
+  await syncProgressToCloud();
+}
+async function initAuth() {
+  if (!authConfigured()) {
+    authSyncState = "local";
+    updateSyncStatus();
+    return;
+  }
+  try {
+    authClient = window.supabase.createClient(AUTH_CONFIG.url, AUTH_CONFIG.anonKey);
+    const { data } = await authClient.auth.getSession();
+    authUser = data?.session?.user || null;
+    authSyncState = authUser ? "pending" : "local";
+    updateSyncStatus();
+    authClient.auth.onAuthStateChange((_event, session) => {
+      authUser = session?.user || null;
+      authSyncState = authUser ? "pending" : "local";
+      updateSyncStatus();
+      if (authUser) void syncProgressFromCloud();
+    });
+    if (authUser) await syncProgressFromCloud();
+  } catch (error) {
+    authSyncState = "error";
+    authError = `登录服务初始化失败：${error.message || "请检查配置"}`;
+    updateSyncStatus();
+  }
+}
+function openAuthModal(mode = "login", preserveError = false) {
+  authMode = mode;
+  if (!preserveError) authError = "";
+  const root = document.getElementById("auth-modal-root");
+  if (!root) return;
+  root.innerHTML = renderAuthModal();
+  bindAuthEvents();
+}
+function closeAuthModal() {
+  const root = document.getElementById("auth-modal-root");
+  if (root) root.innerHTML = "";
+}
+function renderAuthModal() {
+  if (authUser) {
+    return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">学习账号</span><h2 id="auth-title">已登录并同步</h2><p class="auth-lead">${escapeHtml(authUser.email || "当前账号")}<br/>当前状态：${authStatusText()}</p><div class="auth-account-actions"><button class="outline-button" type="button" data-export-progress>导出本机进度</button><button class="danger-button" type="button" id="auth-signout">退出登录</button></div></section></div>`;
+  }
+  const configured = authConfigured();
+  const title = authMode === "signup" ? "创建学习账号" : "登录并同步进度";
+  const form = configured ? `<form class="auth-form" id="auth-form"><label>邮箱<input id="auth-email" type="email" autocomplete="email" placeholder="name@example.com" required /></label><label>密码<input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label><button class="primary-button auth-submit" type="submit">${authBusy ? "处理中…" : title}</button><p class="auth-switch">${authMode === "signup" ? "已有账号？" : "还没有账号？"}<button type="button" class="text-button" data-auth-toggle>${authMode === "signup" ? "直接登录" : "创建账号"}</button></p></form>` : `<div class="auth-setup-note"><strong>登录同步还没有启用</strong><p>当前站点仍可正常练习，进度保存在本机。要在手机、电脑之间同步，需要在 Supabase 创建账号服务并填写两个公开配置值。</p><a href="AUTH-SETUP.md" target="_blank" rel="noreferrer">查看配置说明</a><button type="button" class="outline-button" data-export-progress>导出本机进度</button></div>`;
+  return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">跨设备学习</span><h2 id="auth-title">${title}</h2><p class="auth-lead">登录后，题目掌握状态和错题记录会自动同步。</p>${authError ? `<div class="auth-error">${escapeHtml(authError)}</div>` : ""}${form}</section></div>`;
+}
+function bindAuthEvents() {
+  document.querySelectorAll("[data-close-auth]").forEach((node) => node.addEventListener("click", (event) => { if (event.target === node) closeAuthModal(); }));
+  document.querySelectorAll(".auth-close").forEach((button) => button.addEventListener("click", closeAuthModal));
+  const toggle = document.querySelector("[data-auth-toggle]");
+  if (toggle) toggle.addEventListener("click", () => openAuthModal(authMode === "signup" ? "login" : "signup"));
+  const exportButton = document.querySelector("[data-export-progress]");
+  if (exportButton) exportButton.addEventListener("click", exportLocalProgress);
+  const signout = document.getElementById("auth-signout");
+  if (signout) signout.addEventListener("click", () => { closeAuthModal(); void signOut(); });
+  const form = document.getElementById("auth-form");
+  if (form) form.addEventListener("submit", submitAuthForm);
+}
+async function submitAuthForm(event) {
+  event.preventDefault();
+  if (!authClient || authBusy) return;
+  authBusy = true;
+  authError = "";
+  openAuthModal(authMode);
+  try {
+    const email = document.getElementById("auth-email")?.value.trim();
+    const password = document.getElementById("auth-password")?.value || "";
+    const result = authMode === "signup" ? await authClient.auth.signUp({ email, password }) : await authClient.auth.signInWithPassword({ email, password });
+    if (result.error) throw result.error;
+    if (authMode === "signup" && !result.data?.session) {
+      authError = "注册成功。请先打开邮箱中的验证链接，再回来登录。";
+      authBusy = false;
+      openAuthModal("login", true);
+      return;
+    }
+    authBusy = false;
+    closeAuthModal();
+    showToast(authMode === "signup" ? "账号创建成功，正在同步进度" : "登录成功，正在同步进度");
+  } catch (error) {
+    authBusy = false;
+    authError = error.message || "登录失败，请检查邮箱和密码";
+    openAuthModal(authMode, true);
+  }
+}
+async function signOut() {
+  if (!authClient) return;
+  await authClient.auth.signOut();
+  authUser = null;
+  authSyncState = "local";
+  updateSyncStatus();
+  showToast("已退出，当前设备仍保留本机进度");
+}
+function exportLocalProgress() {
+  const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), progress }, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "ai-trainer-progress.json";
+  link.click();
+  URL.revokeObjectURL(link.href);
+  showToast("本机进度已导出");
+}
 function moduleProgress(id) {
   const tasks = moduleTasks(id);
   if (!tasks.length) return 0;
@@ -942,10 +1131,22 @@ function showToast(message) {
   toast.textContent = message; toast.classList.add("show");
   window.clearTimeout(showToast.timer); showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2400);
 }
+function renderAuthSlot() {
+  const slot = document.getElementById("auth-slot");
+  if (!slot) return;
+  if (authUser) {
+    slot.innerHTML = `<button class="account-button signed-in" type="button" data-open-auth title="${escapeHtml(authUser.email || "已登录")}"><span class="account-avatar">${escapeHtml((authUser.email || "A").slice(0, 1).toUpperCase())}</span><span>${escapeHtml(authUserLabel())}</span><small>${authStatusText()}</small></button>`;
+  } else {
+    slot.innerHTML = `<button class="account-button" type="button" data-open-auth><span class="account-avatar">↗</span><span>登录同步</span><small>${authConfigured() ? "跨设备保存" : "配置后启用"}</small></button>`;
+  }
+  const reset = document.getElementById("auth-signout");
+  if (reset) reset.addEventListener("click", signOut);
+  slot.querySelector("[data-open-auth]")?.addEventListener("click", () => authUser ? openAuthModal("account") : openAuthModal("login"));
+}
 function setRoute(route) {
   currentRoute = route;
   document.querySelectorAll("[data-route]").forEach((button) => button.classList.toggle("active", button.dataset.route === route && button.classList.contains("nav-item")));
-  const titles = { dashboard: "把答案变成动作", practice: practiceMode === "fill" ? "逐空填答" : "先回忆，再看答案", modules: "六大模块，按得分排序", mistakes: "错题不是惩罚，是下一轮提示", plan: "12天冲刺，优先拿稳必考70分" };
+  const titles = { dashboard: "练习总览", practice: practiceMode === "fill" ? "逐空填答" : "先回忆，再看答案", modules: "章节练习", mistakes: "错题复做", plan: "复习计划" };
   document.getElementById("page-title").textContent = titles[route] || titles.dashboard;
   render();
 }
@@ -953,6 +1154,9 @@ function updateShell() {
   document.getElementById("sidebar-countdown").textContent = daysLeft() > 0 ? `还剩 ${daysLeft()} 天` : "今天考试";
   document.getElementById("mistake-count").textContent = hardCount();
   document.getElementById("top-eyebrow").textContent = `今日训练 · ${new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}`;
+  const status = document.getElementById("sync-status");
+  if (status) status.innerHTML = `<span class="status-dot ${authUser && authSyncState === "error" ? "status-error" : ""}"></span><span>${authStatusText()}</span>`;
+  renderAuthSlot();
 }
 
 function render() {
@@ -1015,8 +1219,20 @@ function renderModuleRow(module) {
   return `<div class="module-row"><span class="module-number">${module.label.split(" ")[0]}</span><div><div class="module-name">${module.title}</div><div class="module-meta">${module.label} · ${count}题<div class="module-bar"><span style="width:${pct}%"></span></div></div></div><div class="module-score"><strong>${pct}%</strong>已掌握</div></div>`;
 }
 
+function taskProgress(task) {
+  const state = taskState(task.id);
+  if (state.mastered >= 2) return { label: "已掌握", className: "mastered" };
+  if (state.hard > 0 && state.mastered < state.hard) return { label: "待复做", className: "review" };
+  if (state.attempts > 0) return { label: "练过", className: "attempted" };
+  return { label: "未开始", className: "idle" };
+}
+
 function renderModules() {
-  return `<div class="view-heading"><div><span class="eyebrow">题库地图</span><h2 style="margin-top:7px">先选章节，再按原题顺序练</h2><p>每个模块都按资料中的题号排列。进入后可切换为随机抽题，但默认从第一题开始。</p></div><div class="view-actions"><button class="primary-button" data-route="practice">全部题目 · 按顺序 <span aria-hidden="true">→</span></button></div></div><div class="module-grid">${MODULES.map((module) => { const pct = moduleProgress(module.id); return `<article class="module-card"><div class="module-card-head"><div><h3>${module.title}</h3><p>${module.label} · ${moduleTasks(module.id).length}题 · ${module.desc}</p></div><span class="weight">${module.weight}分</span></div><div class="chain-line">${module.chain.map((step) => `<span>${step}</span>`).join("")}</div><div class="module-card-footer"><small>已掌握 ${pct}%</small><button class="small-button" data-start-module="${module.id}">从本章第1题开始 <span aria-hidden="true">→</span></button></div></article>`; }).join("")}</div>`;
+  return `<div class="view-heading"><div><span class="eyebrow">题库地图</span><h2 style="margin-top:7px">展开章节，直接挑题练习</h2><p>点击章节标题展开题目清单；每道题都可以单独开始，不必从第一题一路做到最后。</p></div><div class="view-actions"><button class="primary-button" data-route="practice">全部题目 · 按顺序 <span aria-hidden="true">→</span></button></div></div><div class="chapter-list">${MODULES.map((module) => {
+    const tasks = moduleTasks(module.id);
+    const pct = moduleProgress(module.id);
+    return `<details class="chapter-accordion"><summary class="chapter-summary"><span class="chapter-chevron" aria-hidden="true">+</span><span class="chapter-summary-main"><span class="chapter-code">${module.label}</span><span><strong>${module.title}</strong><small>${module.desc}</small></span></span><span class="chapter-summary-meta"><strong>${tasks.length}题</strong><small>${pct}% 已掌握</small></span></summary><div class="chapter-body"><div class="chapter-chain">${module.chain.map((step) => `<span>${step}</span>`).join("")}</div><div class="chapter-tools"><button class="small-button" data-start-module="${module.id}">从本章第 1 题开始 <span aria-hidden="true">→</span></button><span>或从下面任选一道题</span></div><div class="chapter-task-list">${tasks.map((task, index) => { const status = taskProgress(task); return `<div class="chapter-task-row"><span class="chapter-task-index">${String(index + 1).padStart(2, "0")}</span><div class="chapter-task-copy"><strong>${task.id} · ${task.title}</strong><small>${task.context}</small></div><span class="task-status ${status.className}">${status.label}</span><button class="outline-button chapter-task-button" data-start-task="${task.id}">练这题 <span aria-hidden="true">→</span></button></div>`; }).join("")}</div></div></details>`;
+  }).join("")}</div>`;
 }
 
 function renderModeBar(task) {
@@ -1084,6 +1300,19 @@ function startSession(filter = currentFilter, fromMistakes = false, mode = "fill
   currentFilter = requestedFilter === "fill" ? "all" : (requestedFilter || "all");
   sessionFromMistakes = Boolean(fromMistakes && pool.length);
   currentTaskIndex = 0; remainingSeconds = 20 * 60; stopTimer(); setRoute("practice");
+}
+function startSingleTask(taskId) {
+  const task = TASKS.find((item) => item.id === taskId);
+  if (!task) return;
+  activeSessionTasks = [task];
+  currentTaskIndex = 0;
+  currentFilter = task.module;
+  practiceMode = "fill";
+  sessionOrder = "sequence";
+  sessionFromMistakes = false;
+  remainingSeconds = 20 * 60;
+  stopTimer();
+  setRoute("practice");
 }
 function stopTimer() { if (timerId) { clearInterval(timerId); timerId = null; } }
 function startTimer() {
@@ -1156,6 +1385,7 @@ function bindEvents() {
   }));
   document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.filter, false, "fill", "sequence")));
   document.querySelectorAll("[data-start-module]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.startModule, false, "fill", "sequence")));
+  document.querySelectorAll("[data-start-task]").forEach((button) => button.addEventListener("click", () => startSingleTask(button.dataset.startTask)));
   document.querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", () => { const task = TASKS.find((item) => item.id === button.dataset.reviewId); if (!task) return; activeSessionTasks = [task]; currentTaskIndex = 0; currentFilter = task.module; practiceMode = "fill"; sessionOrder = "sequence"; sessionFromMistakes = true; setRoute("practice"); }));
   document.querySelectorAll("[data-session-order]").forEach((button) => button.addEventListener("click", () => {
     const nextOrder = button.dataset.sessionOrder === "random" ? "random" : "sequence";
@@ -1187,3 +1417,4 @@ function bindEvents() {
 
 render();
 loadGuide();
+void initAuth();
