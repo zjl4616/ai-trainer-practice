@@ -165,12 +165,15 @@ h3 { font-size: 15px; }
 .session-card p { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .question-panel { padding: 22px; min-width: 0; }
 .practice-mode-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: -8px 0 14px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.practice-control { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .mode-label { color: var(--muted); font-size: 11px; font-weight: 750; margin-right: 2px; }
+.mode-current { color: var(--teal-strong); font-size: 11px; font-weight: 750; }
 .mode-button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); font-size: 11px; font-weight: 750; }
 .mode-button:hover { border-color: var(--teal); color: var(--teal); }
 .mode-button.active { border-color: var(--teal); background: var(--teal-soft); color: var(--teal-strong); }
 .mode-button.disabled { cursor: not-allowed; color: #a9b7b7; background: #f5f8f7; }
 .mode-note { color: var(--muted); font-size: 10px; }
+.filter-hint { margin: -5px 0 10px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .question-top { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .question-id { color: var(--teal); font-size: 11px; font-weight: 800; letter-spacing: .5px; }
 .question-timer { color: var(--orange); font-size: 12px; font-weight: 800; }

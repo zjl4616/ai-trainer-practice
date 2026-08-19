@@ -470,6 +470,8 @@ let currentFilter = "all";
 let currentTaskIndex = 0;
 let activeSessionTasks = [...TASKS];
 let practiceMode = "fill";
+let sessionOrder = "sequence";
+let sessionFromMistakes = false;
 let timerId = null;
 let remainingSeconds = 20 * 60;
 let guideSections = {};
@@ -495,6 +497,15 @@ function moduleProgress(id) {
   if (!tasks.length) return 0;
   return Math.round(tasks.reduce((sum, task) => sum + Math.min(1, taskState(task.id).mastered / 2), 0) / tasks.length * 100);
 }
+function shuffleTasks(tasks) {
+  const shuffled = [...tasks];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+function sessionOrderLabel() { return sessionOrder === "random" ? "随机抽题" : "按资料顺序"; }
 function daysLeft() {
   return Math.max(0, Math.ceil((EXAM_DATE.getTime() - Date.now()) / 86400000));
 }
@@ -974,10 +985,10 @@ function renderDashboard() {
   return `
     <section class="hero-grid">
       <article class="hero-card">
-        <span class="eyebrow">Active recall · 先回忆再核对</span>
-        <h2>今天不抄答案，只练能在考场复现的动作。</h2>
-        <p>每张卡先写出步骤或口述骨架，再展开提示。自评“模糊/不会”的题会自动进入错题复盘，形成当天、次日、3天后、7天后的复做节奏。</p>
-        <div class="hero-actions"><button class="primary-button" data-route="practice">开始今日 ${today[1]} <span aria-hidden="true">→</span></button><button class="outline-button" data-route="practice" data-fill="true" data-practice-mode="fill">填空模拟</button><button class="outline-button" data-route="modules">浏览题库</button></div>
+        <span class="eyebrow">Active recall · 先填空再核对</span>
+        <h2>今天不抄答案，按原题空位逐个写出来。</h2>
+        <p>默认按章节和题号推进，每空提交后立即核对。自评“模糊/不会”的题会自动进入错题复做，形成当天、次日、3天后、7天后的复习节奏。</p>
+        <div class="hero-actions"><button class="primary-button" data-route="practice">按顺序开始训练 <span aria-hidden="true">→</span></button><button class="outline-button" data-route="practice" data-fill="true" data-practice-mode="fill">逐空填答</button><button class="outline-button" data-route="modules">按章节选择</button></div>
       </article>
       <article class="countdown-card">
         <div><span class="eyebrow">距离目标考试</span><div class="days">${days}<small>天</small></div><p>考试日：2026年8月29日<br/>先稳住 2.1 / 2.2 / 3.1 / 3.2 的 70 分。</p></div>
@@ -1005,13 +1016,12 @@ function renderModuleRow(module) {
 }
 
 function renderModules() {
-  return `<div class="view-heading"><div><span class="eyebrow">题库地图</span><h2 style="margin-top:7px">六大模块，先攻必考分区</h2><p>每张卡都只保留能触发动作的关键提示；详细原始文件仍在你的资料目录。</p></div><div class="view-actions"><button class="primary-button" data-route="practice">开始随机训练 <span aria-hidden="true">→</span></button></div></div><div class="module-grid">${MODULES.map((module) => { const pct = moduleProgress(module.id); return `<article class="module-card"><div class="module-card-head"><div><h3>${module.title}</h3><p>${module.label} · ${moduleTasks(module.id).length}题 · ${module.desc}</p></div><span class="weight">${module.weight}分</span></div><div class="chain-line">${module.chain.map((step) => `<span>${step}</span>`).join("")}</div><div class="module-card-footer"><small>已掌握 ${pct}%</small><button class="small-button" data-start-module="${module.id}">进入训练 <span aria-hidden="true">→</span></button></div></article>`; }).join("")}</div>`;
+  return `<div class="view-heading"><div><span class="eyebrow">题库地图</span><h2 style="margin-top:7px">先选章节，再按原题顺序练</h2><p>每个模块都按资料中的题号排列。进入后可切换为随机抽题，但默认从第一题开始。</p></div><div class="view-actions"><button class="primary-button" data-route="practice">全部题目 · 按顺序 <span aria-hidden="true">→</span></button></div></div><div class="module-grid">${MODULES.map((module) => { const pct = moduleProgress(module.id); return `<article class="module-card"><div class="module-card-head"><div><h3>${module.title}</h3><p>${module.label} · ${moduleTasks(module.id).length}题 · ${module.desc}</p></div><span class="weight">${module.weight}分</span></div><div class="chain-line">${module.chain.map((step) => `<span>${step}</span>`).join("")}</div><div class="module-card-footer"><small>已掌握 ${pct}%</small><button class="small-button" data-start-module="${module.id}">从本章第1题开始 <span aria-hidden="true">→</span></button></div></article>`; }).join("")}</div>`;
 }
 
 function renderModeBar(task) {
-  const fillAvailable = hasFillMode(task);
   const source = Boolean(sourceBlocks(task));
-  return `<div class="practice-mode-bar"><span class="mode-label">作答方式</span><button class="mode-button ${practiceMode === "recall" ? "active" : ""}" data-practice-mode="recall">整题回忆</button>${fillAvailable ? `<button class="mode-button ${practiceMode === "fill" ? "active" : ""}" data-practice-mode="fill">逐空填答</button>` : `<button class="mode-button disabled" disabled>逐空填答</button>`}<span class="mode-note">${source ? "原题空位已嵌入素材原文" : "本题按资料空位逐空批改"}</span></div>`;
+  return `<div class="practice-mode-bar"><div class="practice-control"><span class="mode-label">作答方式</span><span class="mode-current">逐空填答 · ${source ? "素材库原题空位" : "资料空位"}</span></div><div class="practice-control"><span class="mode-label">练习顺序</span><button class="mode-button ${sessionOrder === "sequence" ? "active" : ""}" data-session-order="sequence">按资料顺序</button><button class="mode-button ${sessionOrder === "random" ? "active" : ""}" data-session-order="random">随机抽题</button></div><span class="mode-note">默认从本章节第 1 题开始，上一题 / 下一题不会跳出当前章节。</span></div>`;
 }
 
 function renderSelfRate() {
@@ -1042,17 +1052,21 @@ function renderPractice() {
   const task = activeSessionTasks[currentTaskIndex] || TASKS[0];
   const state = taskState(task.id);
   const module = MODULES.find((item) => item.id === task.module);
-  const activeLabel = currentFilter === "all" ? "全部题目" : currentFilter === "fill" ? "填空题" : (MODULES.find((item) => item.id === currentFilter)?.title || "当前模块");
+  const allActive = currentFilter === "all" || currentFilter === "fill";
+  const activeLabel = allActive ? "全部题目" : (MODULES.find((item) => item.id === currentFilter)?.title || "当前模块");
   const progressLine = `${currentTaskIndex + 1} / ${activeSessionTasks.length}`;
   const fillActive = practiceMode === "fill" && hasFillMode(task);
   const unsupportedNotice = practiceMode === "fill" && !hasFillMode(task) ? `<div class="mode-unavailable">本题没有独立下划线空，已切换为整题 / 交付模拟。</div>` : "";
-  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? "按素材原题逐空填写" : "先写，再展开参考骨架"}</h2><p>${fillActive ? "每空先独立作答，提交后按对应原答案逐项批改。" : "不要追求逐字一致；能按触发词复现步骤、输出和验收指标，才算掌握。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">换一组 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>训练筛选</h3><div class="filter-stack"><button class="filter-button ${currentFilter === "all" ? "active" : ""}" data-filter="all">全部题目 <span style="float:right">${TASKS.length}</span></button><button class="filter-button ${currentFilter === "fill" ? "active" : ""}" data-filter="fill">填空题 <span style="float:right">${fillTaskCount()}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">本轮进度</span><strong>${progressLine}</strong><p>自评记录会进入本机进度，不会上传到任何网站。</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${renderTaskAssets(task)}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
+  const practiceHeading = sessionOrder === "random" ? "随机抽题逐空填写" : "按原题顺序逐空填写";
+  const practiceCopy = sessionOrder === "random" ? `本轮已随机打散 · 当前第 ${progressLine} 题。每空先独立填写，提交后按原答案逐项批改。` : `默认按资料题号练习 · 当前第 ${progressLine} 题。每空先独立填写，提交后按原答案逐项批改。`;
+  const sessionCopy = sessionFromMistakes ? (sessionOrder === "random" ? "错题已随机打散；需要回到错题列表顺序时点击“按资料顺序”。" : "按错题列表顺序复做；需要打散时再点“随机抽一轮”。") : (sessionOrder === "random" ? "本轮只打散当前章节；点击“按资料顺序”即可回到第 1 题。" : "默认按资料原题顺序，不会自动打乱。进度只保存在本机。");
+  return `<div class="view-heading"><div><span class="eyebrow">训练 · ${activeLabel}</span><h2 style="margin-top:7px">${fillActive ? practiceHeading : "当前题目缺少可核对空位"}</h2><p>${fillActive ? practiceCopy : "本题没有可核对的素材空位，请先回到题目资料核对原文件。"}</p></div><div class="view-actions"><button class="outline-button" id="shuffle-session">随机抽一轮 <span aria-hidden="true">↻</span></button><button class="primary-button" id="toggle-timer">${timerId ? "暂停计时" : "开始计时"} <span aria-hidden="true">◷</span></button></div></div>${renderModeBar(task)}<div class="practice-layout"><aside class="panel practice-sidebar"><h3>选择章节</h3><p class="filter-hint">点击后从该章节第 1 题开始</p><div class="filter-stack"><button class="filter-button ${allActive ? "active" : ""}" data-filter="all">全部章节 <span style="float:right">${TASKS.length}</span></button>${MODULES.map((item) => `<button class="filter-button ${currentFilter === item.id ? "active" : ""}" data-filter="${item.id}">${item.title} <span style="float:right">${moduleTasks(item.id).length}</span></button>`).join("")}</div><div class="session-card"><span class="eyebrow">${sessionFromMistakes ? "错题复做" : "本轮进度"}</span><strong>${progressLine} · ${sessionOrderLabel()}</strong><p>${sessionCopy}</p></div></aside><section class="panel question-panel"><div class="question-top"><div><span class="question-id">${task.id} · ${module.title}</span><div class="question-context">${module.label} · ${task.source}</div></div><span class="question-timer" id="timer-label">${formatTimer(remainingSeconds)}</span></div><h2>${task.title}</h2><div class="prompt-box"><span class="eyebrow">题目任务</span><p>${task.prompt}</p><p style="margin-top:5px;color:var(--muted)">${task.context}</p></div>${unsupportedNotice}${renderTaskAssets(task)}${fillActive ? renderFillPractice(task, state) : renderRecallPractice(task, state)}${renderGuideDetails(task)}<div class="question-nav"><button id="prev-question">← 上一题</button><button class="next" id="next-question">下一题 →</button></div></section></div>`;
 }
 
 function formatTimer(seconds) { const min = Math.floor(seconds / 60).toString().padStart(2, "0"); const sec = (seconds % 60).toString().padStart(2, "0"); return `${min}:${sec}`; }
 function renderMistakes() {
   const mistakes = TASKS.filter((task) => { const state = taskState(task.id); return state.hard > 0 && state.mastered < state.hard; });
-  return `<div class="view-heading"><div><span class="eyebrow">间隔复习</span><h2 style="margin-top:7px">把卡住的地方变成下一次提示</h2><p>错题记录只在本机保存。先复做最弱的一题，再去刷新题。</p></div><div class="view-actions"><button class="primary-button" data-route="practice" data-mistakes="true">开始错题复做 <span aria-hidden="true">→</span></button></div></div><div class="mistake-grid">${mistakes.length ? mistakes.map((task) => { const state = taskState(task.id); const module = MODULES.find((item) => item.id === task.module); return `<article class="mistake-row"><span class="id">${task.id}</span><div><strong>${task.title}</strong><p>${module.title} · ${state.error ? `${state.error} 类卡点 · ` : ""}已错 ${state.hard} 次，掌握 ${Math.min(2, state.mastered)}/2</p></div><div class="last">${state.last ? `上次 ${formatDate(new Date(state.last))}` : "待复做"}<br/><button class="small-button" data-review-id="${task.id}">复做</button></div></article>`; }).join("") : `<div class="panel empty-state"><strong>还没有错题记录</strong><p>开始一轮回忆训练，自评“不会”或“模糊”的题会出现在这里。</p><button class="primary-button" style="margin-top:15px" data-route="practice">去做第一题 <span aria-hidden="true">→</span></button></div>`}</div>`;
+  return `<div class="view-heading"><div><span class="eyebrow">间隔复习</span><h2 style="margin-top:7px">把卡住的空位变成下一次提示</h2><p>错题记录只在本机保存。先逐空复做最弱的一题，再去刷新题。</p></div><div class="view-actions"><button class="primary-button" data-route="practice" data-mistakes="true">开始错题复做 <span aria-hidden="true">→</span></button></div></div><div class="mistake-grid">${mistakes.length ? mistakes.map((task) => { const state = taskState(task.id); const module = MODULES.find((item) => item.id === task.module); return `<article class="mistake-row"><span class="id">${task.id}</span><div><strong>${task.title}</strong><p>${module.title} · ${state.error ? `${state.error} 类卡点 · ` : ""}已错 ${state.hard} 次，掌握 ${Math.min(2, state.mastered)}/2</p></div><div class="last">${state.last ? `上次 ${formatDate(new Date(state.last))}` : "待复做"}<br/><button class="small-button" data-review-id="${task.id}">复做</button></div></article>`; }).join("") : `<div class="panel empty-state"><strong>还没有错题记录</strong><p>开始一轮逐空训练，自评“不会”或“模糊”的题会出现在这里。</p><button class="primary-button" style="margin-top:15px" data-route="practice">去做第一题 <span aria-hidden="true">→</span></button></div>`}</div>`;
 }
 
 function renderPlan() {
@@ -1060,11 +1074,15 @@ function renderPlan() {
   return `<div class="view-heading"><div><span class="eyebrow">倒排复习</span><h2 style="margin-top:7px">把半个月拆成可验收的小块</h2><p>今天到考试前，不追求看完所有资料；每天完成一次独立复现，并记下一条错因和改进动作。</p></div><div class="view-actions"><button class="primary-button" data-route="practice">按计划开始 <span aria-hidden="true">→</span></button></div></div><div class="plan-layout"><section class="panel timeline"><div class="section-header"><div><h2>每日安排</h2><p>四个必考单元先形成稳定得分区。</p></div><span class="weight" style="padding:6px 8px;background:var(--orange-soft);color:var(--orange);font-size:10px;font-weight:800;border-radius:5px">目标 75+</span></div><div class="timeline-list">${PLAN.map((item) => `<article class="timeline-item ${item[0] === todayKey ? "current" : ""} ${item[0] < todayKey ? "done" : ""}"><div class="timeline-date">${item[0]}</div><div class="timeline-rail"><span class="timeline-dot"></span></div><div class="timeline-content"><strong>${item[1]}</strong><p>${item[2]}</p></div></article>`).join("")}</div></section><aside class="memory-panel"><span class="eyebrow">四条动作链</span><h3>看到题目就触发</h3><p>不要背整段答案。每条链都要在 2 分钟内口述出来，再开始写代码或答题骨架。</p><div class="memory-stack">${ACTION_CARDS.map((card) => `<article class="memory-card"><strong>${card[0]}</strong><span>${card[1]}</span><span>${card[2]}</span></article>`).join("")}</div></aside></div>`;
 }
 
-function startSession(filter = currentFilter, fromMistakes = false, mode = "fill") {
-  currentFilter = filter;
+function startSession(filter = currentFilter, fromMistakes = false, mode = "fill", order = "sequence") {
+  const requestedFilter = filter;
   practiceMode = mode;
-  const pool = fromMistakes ? TASKS.filter((task) => { const state = taskState(task.id); return state.hard > 0 && state.mastered < state.hard; }) : (filter === "fill" ? TASKS.filter((task) => hasFillMode(task)) : (filter === "all" ? TASKS : moduleTasks(filter)));
-  activeSessionTasks = pool.length ? [...pool].sort(() => Math.random() - .5) : [...TASKS];
+  sessionOrder = order === "random" ? "random" : "sequence";
+  const pool = fromMistakes ? TASKS.filter((task) => { const state = taskState(task.id); return state.hard > 0 && state.mastered < state.hard; }) : (requestedFilter === "fill" ? TASKS.filter((task) => hasFillMode(task)) : (requestedFilter === "all" ? TASKS : moduleTasks(requestedFilter)));
+  const usablePool = pool.length ? pool : [...TASKS];
+  activeSessionTasks = sessionOrder === "random" ? shuffleTasks(usablePool) : [...usablePool];
+  currentFilter = requestedFilter === "fill" ? "all" : (requestedFilter || "all");
+  sessionFromMistakes = Boolean(fromMistakes && pool.length);
   currentTaskIndex = 0; remainingSeconds = 20 * 60; stopTimer(); setRoute("practice");
 }
 function stopTimer() { if (timerId) { clearInterval(timerId); timerId = null; } }
@@ -1132,13 +1150,17 @@ function nextQuestion(delta = 1) { currentTaskIndex = (currentTaskIndex + delta 
 
 function bindEvents() {
   document.querySelectorAll("[data-route]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.route === "practice" && (button.dataset.focus || button.dataset.mistakes || button.dataset.fill === "true")) {
-      startSession(button.dataset.fill === "true" ? "fill" : (button.dataset.focus || "all"), button.dataset.mistakes === "true", button.dataset.practiceMode || "fill");
+    if (button.dataset.route === "practice") {
+      startSession(button.dataset.fill === "true" ? "all" : (button.dataset.focus || "all"), button.dataset.mistakes === "true", button.dataset.practiceMode || "fill", "sequence");
     } else setRoute(button.dataset.route);
   }));
-  document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.filter, false, "fill")));
-  document.querySelectorAll("[data-start-module]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.startModule)));
-  document.querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", () => { const index = TASKS.findIndex((task) => task.id === button.dataset.reviewId); activeSessionTasks = [TASKS[index]]; currentTaskIndex = 0; setRoute("practice"); }));
+  document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.filter, false, "fill", "sequence")));
+  document.querySelectorAll("[data-start-module]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.startModule, false, "fill", "sequence")));
+  document.querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", () => { const task = TASKS.find((item) => item.id === button.dataset.reviewId); if (!task) return; activeSessionTasks = [task]; currentTaskIndex = 0; currentFilter = task.module; practiceMode = "fill"; sessionOrder = "sequence"; sessionFromMistakes = true; setRoute("practice"); }));
+  document.querySelectorAll("[data-session-order]").forEach((button) => button.addEventListener("click", () => {
+    const nextOrder = button.dataset.sessionOrder === "random" ? "random" : "sequence";
+    startSession(currentFilter, sessionFromMistakes, practiceMode, nextOrder);
+  }));
   document.querySelectorAll("[data-practice-mode]").forEach((button) => button.addEventListener("click", () => {
     const task = activeSessionTasks[currentTaskIndex];
     if (button.dataset.practiceMode === "fill" && !hasFillMode(task)) { showToast("本题没有独立填空，请按整题或交付模拟作答。"); return; }
@@ -1159,7 +1181,7 @@ function bindEvents() {
   const prev = document.getElementById("prev-question"); if (prev) prev.addEventListener("click", () => nextQuestion(-1));
   const next = document.getElementById("next-question"); if (next) next.addEventListener("click", () => nextQuestion(1));
   const timer = document.getElementById("toggle-timer"); if (timer) timer.addEventListener("click", startTimer);
-  const shuffle = document.getElementById("shuffle-session"); if (shuffle) shuffle.addEventListener("click", () => startSession(currentFilter, false, practiceMode));
+  const shuffle = document.getElementById("shuffle-session"); if (shuffle) shuffle.addEventListener("click", () => startSession(currentFilter, sessionFromMistakes, practiceMode, "random"));
   const reset = document.getElementById("reset-progress"); if (reset) reset.addEventListener("click", () => { if (window.confirm("确定清空本机练习进度吗？")) { progress = {}; saveProgress(); showToast("本机进度已清空"); render(); } });
 }
 
