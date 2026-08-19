@@ -1,10 +1,8 @@
-/*
- * Cross-device progress is optional. Fill these two public Supabase values
- * after following AUTH-SETUP.md, then redeploy the static site.
- */
+/* CloudBase publishable settings. This key is safe to ship in a browser. */
 window.AI_TRAINER_AUTH = {
-  provider: "supabase",
-  url: "",
-  anonKey: "",
-  table: "practice_progress"
+  provider: "cloudbase",
+  env: "token-d2g5m49b25995a29c",
+  region: "ap-shanghai",
+  accessKey: "eyJhbGciOiJSUzI1NiIsImtpZCI6IjlkMWRjMzFlLWI0ZDAtNDQ4Yi1hNzZmLWIwY2M2M2Q4MTQ5OCJ9.eyJpc3MiOiJodHRwczovL3Rva2VuLWQyZzVtNDliMjU5OTVhMjljLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJ0b2tlbi1kMmc1bTQ5YjI1OTk1YTI5YyIsImV4cCI6NDA4ODgzOTE2MywiaWF0IjoxNzg1MTU1OTYzLCJub25jZSI6ImRZanEyam9KU1BPYkhLVU12WFVBNmciLCJhdF9oYXNoIjoiZFlqcTJqb0pTUE9iSEtVTXZYVUE2ZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJ0b2tlbi1kMmc1bTQ5YjI1OTk1YTI5YyIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJ1c2VyX3R5cGUiOiIiLCJjbGllbnRfdHlwZSI6ImNsaWVudF91c2VyIiwiaXNfc3lzdGVtX2FkbWluIjpmYWxzZX0.jybIEOEVfwBov7xWIchnOX2Cow53WMRaHlNSo4Se1Ovf2ST0GFQftL1MaG7RTXgdg2YwVReKV_qYoG18UDcsqifsOaALS5OLkZP_eJbh5pXCc-79DaqXhQKPqXQ0Ql3Nd5-UMQK3JIIQbGpcCplrDvv3ArMOiUhoR5kwYv0wyDzvVxxsN3JwmMUK-QIxl9TrqqTPsrAM8bxjt-x8X6Urm1MA96ET30ATkVEdBwTnD_MINabKBGBVW0X1lEmFTyKn7YYyqVCt6PME9qcPSwyjMfcolOkCX6dn0KddIvyiKzSGxySDMSVvXK0X3yhFec8mjx1tN-XHNw9wVs6BsJv_0A",
+  table: "ai_trainer_progress"
 };

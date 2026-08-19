@@ -490,13 +490,16 @@ function loadProgress() {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
 }
 let authClient = null;
+let dbClient = null;
 let authUser = null;
 let authMode = "login";
 let authBusy = false;
 let authSyncState = "local";
 let authSyncTimer = null;
 let authError = "";
-function authConfigured() { return Boolean(AUTH_CONFIG.provider === "supabase" && AUTH_CONFIG.url && AUTH_CONFIG.anonKey && window.supabase?.createClient); }
+function authConfigured() {
+  return Boolean(AUTH_CONFIG.provider === "cloudbase" && AUTH_CONFIG.env && AUTH_CONFIG.region && AUTH_CONFIG.accessKey && window.cloudbase?.init);
+}
 function saveProgress() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
   if (authUser && authClient) {
@@ -531,8 +534,8 @@ function mergeProgress(local, remote) {
   return merged;
 }
 function authUserLabel() {
-  const email = authUser?.email || "已登录";
-  return email.length > 22 ? `${email.slice(0, 19)}…` : email;
+  const username = authUser?.username || authUser?.user_metadata?.username || authUser?.email || "已登录";
+  return username.length > 22 ? `${username.slice(0, 19)}…` : username;
 }
 function authStatusText() {
   if (!authConfigured()) return "本机模式";
@@ -547,33 +550,42 @@ function updateSyncStatus() {
   renderAuthSlot();
 }
 async function syncProgressToCloud() {
-  if (!authClient || !authUser) return;
+  if (!dbClient || !authUser) return;
   authSyncState = "pending";
   updateSyncStatus();
-  const { error } = await authClient.from(AUTH_TABLE).upsert({
-    user_id: authUser.id,
-    progress,
-    updated_at: new Date().toISOString()
-  }, { onConflict: "user_id" });
-  authSyncState = error ? "error" : "synced";
-  if (error) authError = `同步失败：${error.message || "请检查 Supabase 表和权限"}`;
+  try {
+    const collection = dbClient.collection(AUTH_TABLE);
+    const payload = { progress, updated_at: new Date().toISOString() };
+    const updateResult = await collection.where({ user_id: authUser.id }).update(payload);
+    const updated = Number(updateResult?.updated || 0);
+    if (updated === 0) {
+      const addResult = await collection.add({ user_id: authUser.id, ...payload });
+      if (!addResult?._id) throw new Error("云端记录创建未返回文档 ID");
+    }
+    authSyncState = "synced";
+  } catch (error) {
+    authSyncState = "error";
+    authError = `同步失败：${error.message || "请检查云端进度权限"}`;
+  }
   updateSyncStatus();
 }
 async function syncProgressFromCloud() {
-  if (!authClient || !authUser) return;
+  if (!dbClient || !authUser) return;
   authSyncState = "pending";
   updateSyncStatus();
-  const { data, error } = await authClient.from(AUTH_TABLE).select("progress").eq("user_id", authUser.id).maybeSingle();
-  if (error) {
+  try {
+    const result = await dbClient.collection(AUTH_TABLE).where({ user_id: authUser.id }).get();
+    const data = Array.isArray(result?.data) ? result.data[0] : null;
+    if (data?.progress) {
+      progress = mergeProgress(progress, data.progress);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+      showToast("已合并云端进度");
+    }
+  } catch (error) {
     authSyncState = "error";
-    authError = `读取云端进度失败：${error.message || "请检查 Supabase 表和权限"}`;
+    authError = `读取云端进度失败：${error.message || "请检查云端进度权限"}`;
     updateSyncStatus();
     return;
-  }
-  if (data?.progress) {
-    progress = mergeProgress(progress, data.progress);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
-    showToast("已合并云端进度");
   }
   authSyncState = "synced";
   updateSyncStatus();
@@ -587,13 +599,23 @@ async function initAuth() {
     return;
   }
   try {
-    authClient = window.supabase.createClient(AUTH_CONFIG.url, AUTH_CONFIG.anonKey);
-    const { data } = await authClient.auth.getSession();
-    authUser = data?.session?.user || null;
+    const cloudApp = window.cloudbase.init({
+      env: AUTH_CONFIG.env,
+      region: AUTH_CONFIG.region,
+      accessKey: AUTH_CONFIG.accessKey,
+      auth: { detectSessionInUrl: true }
+    });
+    authClient = cloudApp.auth;
+    dbClient = cloudApp.database();
+    const { data, error } = await authClient.getSession();
+    if (error) throw error;
+    const sessionUser = data?.session?.user;
+    authUser = sessionUser && !sessionUser.is_anonymous ? sessionUser : null;
     authSyncState = authUser ? "pending" : "local";
     updateSyncStatus();
-    authClient.auth.onAuthStateChange((_event, session) => {
-      authUser = session?.user || null;
+    authClient.onAuthStateChange((_event, session) => {
+      const nextUser = session?.user;
+      authUser = nextUser && !nextUser.is_anonymous ? nextUser : null;
       authSyncState = authUser ? "pending" : "local";
       updateSyncStatus();
       if (authUser) void syncProgressFromCloud();
@@ -619,11 +641,12 @@ function closeAuthModal() {
 }
 function renderAuthModal() {
   if (authUser) {
-    return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">学习账号</span><h2 id="auth-title">已登录并同步</h2><p class="auth-lead">${escapeHtml(authUser.email || "当前账号")}<br/>当前状态：${authStatusText()}</p><div class="auth-account-actions"><button class="outline-button" type="button" data-export-progress>导出本机进度</button><button class="danger-button" type="button" id="auth-signout">退出登录</button></div></section></div>`;
+    const label = authUser.username || authUser.user_metadata?.username || authUser.email || "当前账号";
+    return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">学习账号</span><h2 id="auth-title">已登录并同步</h2><p class="auth-lead">${escapeHtml(label)}<br/>当前状态：${authStatusText()}</p><div class="auth-account-actions"><button class="outline-button" type="button" data-export-progress>导出本机进度</button><button class="danger-button" type="button" id="auth-signout">退出登录</button></div></section></div>`;
   }
   const configured = authConfigured();
-  const title = authMode === "signup" ? "创建学习账号" : "登录并同步进度";
-  const form = configured ? `<form class="auth-form" id="auth-form"><label>邮箱<input id="auth-email" type="email" autocomplete="email" placeholder="name@example.com" required /></label><label>密码<input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label><button class="primary-button auth-submit" type="submit">${authBusy ? "处理中…" : title}</button><p class="auth-switch">${authMode === "signup" ? "已有账号？" : "还没有账号？"}<button type="button" class="text-button" data-auth-toggle>${authMode === "signup" ? "直接登录" : "创建账号"}</button></p></form>` : `<div class="auth-setup-note"><strong>登录同步还没有启用</strong><p>当前站点仍可正常练习，进度保存在本机。要在手机、电脑之间同步，需要在 Supabase 创建账号服务并填写两个公开配置值。</p><a href="AUTH-SETUP.md" target="_blank" rel="noreferrer">查看配置说明</a><button type="button" class="outline-button" data-export-progress>导出本机进度</button></div>`;
+  const title = "登录并同步进度";
+  const form = configured ? `<form class="auth-form" id="auth-form"><label>账号<input id="auth-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="例如：zhangsan" required /></label><label>密码<input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label><button class="primary-button auth-submit" type="submit">${authBusy ? "处理中…" : title}</button><p class="auth-switch">首次使用请先由管理员在 CloudBase 创建账号</p></form>` : `<div class="auth-setup-note"><strong>登录同步还没有启用</strong><p>当前站点仍可正常练习，进度保存在本机。配置 CloudBase 后可在手机、电脑之间同步。</p><a href="AUTH-SETUP.md" target="_blank" rel="noreferrer">查看配置说明</a><button type="button" class="outline-button" data-export-progress>导出本机进度</button></div>`;
   return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">跨设备学习</span><h2 id="auth-title">${title}</h2><p class="auth-lead">登录后，题目掌握状态和错题记录会自动同步。</p>${authError ? `<div class="auth-error">${escapeHtml(authError)}</div>` : ""}${form}</section></div>`;
 }
 function bindAuthEvents() {
@@ -645,32 +668,33 @@ async function submitAuthForm(event) {
   authError = "";
   openAuthModal(authMode);
   try {
-    const email = document.getElementById("auth-email")?.value.trim();
+    const username = document.getElementById("auth-username")?.value.trim();
     const password = document.getElementById("auth-password")?.value || "";
-    const result = authMode === "signup" ? await authClient.auth.signUp({ email, password }) : await authClient.auth.signInWithPassword({ email, password });
+    const result = await authClient.signInWithPassword({ username, password });
     if (result.error) throw result.error;
-    if (authMode === "signup" && !result.data?.session) {
-      authError = "注册成功。请先打开邮箱中的验证链接，再回来登录。";
-      authBusy = false;
-      openAuthModal("login", true);
-      return;
-    }
     authBusy = false;
     closeAuthModal();
-    showToast(authMode === "signup" ? "账号创建成功，正在同步进度" : "登录成功，正在同步进度");
+    showToast("登录成功，正在同步进度");
   } catch (error) {
     authBusy = false;
-    authError = error.message || "登录失败，请检查邮箱和密码";
+    authError = error.message || "登录失败，请检查账号和密码";
     openAuthModal(authMode, true);
   }
 }
 async function signOut() {
   if (!authClient) return;
-  await authClient.auth.signOut();
-  authUser = null;
-  authSyncState = "local";
-  updateSyncStatus();
-  showToast("已退出，当前设备仍保留本机进度");
+  try {
+    const { error } = await authClient.signOut();
+    if (error) throw error;
+    authUser = null;
+    authSyncState = "local";
+    updateSyncStatus();
+    showToast("已退出，当前设备仍保留本机进度");
+  } catch (error) {
+    authError = error.message || "退出登录失败";
+    authSyncState = "error";
+    updateSyncStatus();
+  }
 }
 function exportLocalProgress() {
   const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), progress }, null, 2)], { type: "application/json" });
@@ -1135,7 +1159,8 @@ function renderAuthSlot() {
   const slot = document.getElementById("auth-slot");
   if (!slot) return;
   if (authUser) {
-    slot.innerHTML = `<button class="account-button signed-in" type="button" data-open-auth title="${escapeHtml(authUser.email || "已登录")}"><span class="account-avatar">${escapeHtml((authUser.email || "A").slice(0, 1).toUpperCase())}</span><span>${escapeHtml(authUserLabel())}</span><small>${authStatusText()}</small></button>`;
+    const label = authUser.username || authUser.user_metadata?.username || authUser.email || "已登录";
+    slot.innerHTML = `<button class="account-button signed-in" type="button" data-open-auth title="${escapeHtml(label)}"><span class="account-avatar">${escapeHtml(label.slice(0, 1).toUpperCase())}</span><span>${escapeHtml(authUserLabel())}</span><small>${authStatusText()}</small></button>`;
   } else {
     slot.innerHTML = `<button class="account-button" type="button" data-open-auth><span class="account-avatar">↗</span><span>登录同步</span><small>${authConfigured() ? "跨设备保存" : "配置后启用"}</small></button>`;
   }

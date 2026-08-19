@@ -1,63 +1,41 @@
 # 登录与跨设备进度
 
-这个站是 GitHub Pages 静态站，不能只靠浏览器本身保存跨设备数据。登录同步采用 Supabase 邮箱账号，匿名公钥可以放在前端，真正的访问控制由数据库 RLS 规则负责。
+本站是 GitHub Pages 静态站，登录同步使用已有的 CloudBase 环境，不需要另建 Supabase 项目。
 
-## 1. 创建项目
+## 已完成的云端配置
 
-在 Supabase 创建一个项目，在 `Project Settings → API` 复制：
+- 环境：`token-d2g5m49b25995a29c`，区域：`ap-shanghai`
+- 登录方式：CloudBase 账号 + 密码（普通用户名，不是邮箱）
+- 进度集合：`ai_trainer_progress`
+- 唯一索引：`user_id_unique`
+- 权限：每个账号只能读写自己的 `user_id` 记录
+- 安全域名：`localhost:4173`、`zjl4616.github.io`
 
-- `Project URL`
-- `anon public key`
+## 前端配置
 
-不要把 `service_role` key 放进网站，也不要提交到 GitHub。
-
-## 2. 创建进度表
-
-在 Supabase SQL Editor 执行：
-
-```sql
-create table public.practice_progress (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  progress jsonb not null default '{}'::jsonb,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.practice_progress enable row level security;
-
-create policy "users can read own practice progress"
-on public.practice_progress for select
-to authenticated
-using (auth.uid() = user_id);
-
-create policy "users can insert own practice progress"
-on public.practice_progress for insert
-to authenticated
-with check (auth.uid() = user_id);
-
-create policy "users can update own practice progress"
-on public.practice_progress for update
-to authenticated
-using (auth.uid() = user_id)
-with check (auth.uid() = user_id);
-```
-
-## 3. 填写前端配置
-
-编辑 `auth-config.js`：
+`auth-config.js` 中只放 CloudBase publishable key。它是浏览器端公开配置，可以提交到 GitHub；不要把 CloudBase 管理密钥、API 密钥或服务端凭证放进前端。
 
 ```js
 window.AI_TRAINER_AUTH = {
-  provider: "supabase",
-  url: "https://你的项目.supabase.co",
-  anonKey: "你的 anon public key",
-  table: "practice_progress"
+  provider: "cloudbase",
+  env: "token-d2g5m49b25995a29c",
+  region: "ap-shanghai",
+  accessKey: "CloudBase publishable key",
+  table: "ai_trainer_progress"
 };
 ```
 
-然后提交并推送到 `gh-pages`。登录后，本机已有进度会和云端进度合并；之后每次自评都会自动同步。未填写配置时，网站仍可作为本机练习站使用，并可从登录窗口导出本机进度。
+## 使用方式
 
-## 4. 邮箱验证
+1. 由管理员在 CloudBase 控制台的“用户管理”中创建普通用户名和密码账号。
+2. 打开网站右上角“登录同步”，填写账号和密码。
+3. 登录后，已有本机进度会与云端进度合并；之后每次批改或自评都会自动同步。
+4. 换设备打开同一个 GitHub Pages 地址，用相同账号登录即可恢复进度。
 
-Supabase 默认可能要求注册邮箱验证。开发阶段可以在 `Authentication → Providers → Email` 关闭 Confirm email；正式使用建议保留验证，并在 `Authentication → URL Configuration` 添加 GitHub Pages 地址：
+当前 CloudBase Web SDK 的 `signUp()` 仅支持邮箱或手机号验证，不能在浏览器直接创建普通用户名账号；因此站点不把管理密钥放在前端，也不提供一个必然失败的自助注册按钮。
 
-`https://zjl4616.github.io/ai-trainer-practice/`
+未登录时仍可以完整练习，进度保存在当前浏览器；登录窗口也可以导出本机进度 JSON 作为备份。
+
+## 域名变更
+
+如果将来更换 GitHub Pages 域名或本地开发端口，需要在 CloudBase 安全域名中添加新的 `host:port`。安全域名传播可能需要几分钟。
