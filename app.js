@@ -497,6 +497,7 @@ let authBusy = false;
 let authSyncState = "local";
 let authSyncTimer = null;
 let authError = "";
+let authUsernameDraft = "";
 function authConfigured() {
   return Boolean(AUTH_CONFIG.provider === "cloudbase" && AUTH_CONFIG.env && AUTH_CONFIG.region && AUTH_CONFIG.accessKey && window.cloudbase?.init);
 }
@@ -646,7 +647,7 @@ function renderAuthModal() {
   }
   const configured = authConfigured();
   const title = "登录并同步进度";
-  const form = configured ? `<form class="auth-form" id="auth-form"><label>账号<input id="auth-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="例如：zhangsan" required /></label><label>密码<input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label><button class="primary-button auth-submit" type="submit">${authBusy ? "处理中…" : title}</button><p class="auth-switch">首次使用请先由管理员在 CloudBase 创建账号</p></form>` : `<div class="auth-setup-note"><strong>登录同步还没有启用</strong><p>当前站点仍可正常练习，进度保存在本机。配置 CloudBase 后可在手机、电脑之间同步。</p><a href="AUTH-SETUP.md" target="_blank" rel="noreferrer">查看配置说明</a><button type="button" class="outline-button" data-export-progress>导出本机进度</button></div>`;
+  const form = configured ? `<form class="auth-form" id="auth-form"><label>账号<input id="auth-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="例如：zhangsan" value="${escapeHtml(authUsernameDraft)}" required /></label><label>密码<input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 6 位" minlength="6" required /></label><button class="primary-button auth-submit" type="submit">${authBusy ? "处理中…" : title}</button><p class="auth-switch">首次使用请先由管理员在 CloudBase 创建账号</p></form>` : `<div class="auth-setup-note"><strong>登录同步还没有启用</strong><p>当前站点仍可正常练习，进度保存在本机。配置 CloudBase 后可在手机、电脑之间同步。</p><a href="AUTH-SETUP.md" target="_blank" rel="noreferrer">查看配置说明</a><button type="button" class="outline-button" data-export-progress>导出本机进度</button></div>`;
   return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">跨设备学习</span><h2 id="auth-title">${title}</h2><p class="auth-lead">登录后，题目掌握状态和错题记录会自动同步。</p>${authError ? `<div class="auth-error">${escapeHtml(authError)}</div>` : ""}${form}</section></div>`;
 }
 function bindAuthEvents() {
@@ -664,15 +665,18 @@ function bindAuthEvents() {
 async function submitAuthForm(event) {
   event.preventDefault();
   if (!authClient || authBusy) return;
+  const username = document.getElementById("auth-username")?.value.trim() || "";
+  const password = document.getElementById("auth-password")?.value || "";
+  authUsernameDraft = username;
   authBusy = true;
   authError = "";
   openAuthModal(authMode);
   try {
-    const username = document.getElementById("auth-username")?.value.trim();
-    const password = document.getElementById("auth-password")?.value || "";
+    if (!username || !password) throw new Error("请输入账号和密码");
     const result = await authClient.signInWithPassword({ username, password });
     if (result.error) throw result.error;
     authBusy = false;
+    authUsernameDraft = "";
     closeAuthModal();
     showToast("登录成功，正在同步进度");
   } catch (error) {
