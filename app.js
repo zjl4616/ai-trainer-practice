@@ -538,6 +538,14 @@ function authUserLabel() {
   const username = authUser?.username || authUser?.user_metadata?.username || authUser?.email || "已登录";
   return username.length > 22 ? `${username.slice(0, 19)}…` : username;
 }
+function authUserId() {
+  return authUser?.id || authUser?.uid || authUser?.user_metadata?.uid || "";
+}
+function formatCloudError(error, fallback) {
+  const code = error?.code || error?.error?.code || "";
+  const message = error?.message || error?.error?.message || fallback;
+  return code ? `${message}（${code}）` : message;
+}
 function authStatusText() {
   if (!authConfigured()) return "本机模式";
   if (!authUser) return "尚未登录";
@@ -551,31 +559,54 @@ function updateSyncStatus() {
   renderAuthSlot();
 }
 async function syncProgressToCloud() {
+  const userId = authUserId();
   if (!dbClient || !authUser) return;
+  if (!userId) {
+    authSyncState = "error";
+    authError = "登录用户缺少唯一标识，请退出后重新登录";
+    updateSyncStatus();
+    return;
+  }
   authSyncState = "pending";
   updateSyncStatus();
   try {
     const collection = dbClient.collection(AUTH_TABLE);
     const payload = { progress, updated_at: new Date().toISOString() };
-    const updateResult = await collection.where({ user_id: authUser.id }).update(payload);
+    const updateResult = await collection.where({ user_id: userId }).update(payload);
+    if (updateResult?.code && updateResult.code !== 0) throw new Error(formatCloudError(updateResult, "云端更新被拒绝"));
     const updated = Number(updateResult?.updated || 0);
     if (updated === 0) {
-      const addResult = await collection.add({ user_id: authUser.id, ...payload });
-      if (!addResult?._id) throw new Error("云端记录创建未返回文档 ID");
+      const addResult = await collection.add({ user_id: userId, ...payload });
+      if (addResult?.code && addResult.code !== 0) throw new Error(formatCloudError(addResult, "云端记录创建被拒绝"));
+      const createdId = addResult?._id || addResult?.id || addResult?.data?._id || addResult?.data?.id;
+      if (!createdId) {
+        const verifyResult = await collection.where({ user_id: userId }).get();
+        if (!Array.isArray(verifyResult?.data) || verifyResult.data.length === 0) {
+          throw new Error("云端记录创建后回查不到记录");
+        }
+      }
     }
     authSyncState = "synced";
   } catch (error) {
     authSyncState = "error";
-    authError = `同步失败：${error.message || "请检查云端进度权限"}`;
+    authError = `同步失败：${formatCloudError(error, "请检查云端进度权限")}`;
   }
   updateSyncStatus();
 }
 async function syncProgressFromCloud() {
+  const userId = authUserId();
   if (!dbClient || !authUser) return;
+  if (!userId) {
+    authSyncState = "error";
+    authError = "登录用户缺少唯一标识，请退出后重新登录";
+    updateSyncStatus();
+    return;
+  }
   authSyncState = "pending";
   updateSyncStatus();
   try {
-    const result = await dbClient.collection(AUTH_TABLE).where({ user_id: authUser.id }).get();
+    const result = await dbClient.collection(AUTH_TABLE).where({ user_id: userId }).get();
+    if (result?.code && result.code !== 0) throw new Error(formatCloudError(result, "云端记录读取被拒绝"));
     const data = Array.isArray(result?.data) ? result.data[0] : null;
     if (data?.progress) {
       progress = mergeProgress(progress, data.progress);
@@ -584,7 +615,7 @@ async function syncProgressFromCloud() {
     }
   } catch (error) {
     authSyncState = "error";
-    authError = `读取云端进度失败：${error.message || "请检查云端进度权限"}`;
+    authError = `读取云端进度失败：${formatCloudError(error, "请检查云端进度权限")}`;
     updateSyncStatus();
     return;
   }
@@ -630,7 +661,7 @@ async function initAuth() {
 }
 function openAuthModal(mode = "login", preserveError = false) {
   authMode = mode;
-  if (!preserveError) authError = "";
+  if (!preserveError && !authUser) authError = "";
   const root = document.getElementById("auth-modal-root");
   if (!root) return;
   root.innerHTML = renderAuthModal();
@@ -643,7 +674,8 @@ function closeAuthModal() {
 function renderAuthModal() {
   if (authUser) {
     const label = authUser.username || authUser.user_metadata?.username || authUser.email || "当前账号";
-    return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">学习账号</span><h2 id="auth-title">已登录并同步</h2><p class="auth-lead">${escapeHtml(label)}<br/>当前状态：${authStatusText()}</p><div class="auth-account-actions"><button class="outline-button" type="button" data-export-progress>导出本机进度</button><button class="danger-button" type="button" id="auth-signout">退出登录</button></div></section></div>`;
+    const syncError = authSyncState === "error" && authError ? `<div class="auth-error">${escapeHtml(authError)}</div><button class="outline-button" type="button" data-retry-sync>重试同步</button>` : "";
+    return `<div class="auth-backdrop" data-close-auth><section class="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title"><button class="auth-close" type="button" data-close-auth aria-label="关闭">×</button><span class="eyebrow">学习账号</span><h2 id="auth-title">已登录并同步</h2><p class="auth-lead">${escapeHtml(label)}<br/>当前状态：${authStatusText()}</p>${syncError}<div class="auth-account-actions"><button class="outline-button" type="button" data-export-progress>导出本机进度</button><button class="danger-button" type="button" id="auth-signout">退出登录</button></div></section></div>`;
   }
   const configured = authConfigured();
   const title = "登录并同步进度";
@@ -657,6 +689,8 @@ function bindAuthEvents() {
   if (toggle) toggle.addEventListener("click", () => openAuthModal(authMode === "signup" ? "login" : "signup"));
   const exportButton = document.querySelector("[data-export-progress]");
   if (exportButton) exportButton.addEventListener("click", exportLocalProgress);
+  const retrySync = document.querySelector("[data-retry-sync]");
+  if (retrySync) retrySync.addEventListener("click", () => { authError = ""; void syncProgressFromCloud(); });
   const signout = document.getElementById("auth-signout");
   if (signout) signout.addEventListener("click", () => { closeAuthModal(); void signOut(); });
   const form = document.getElementById("auth-form");
@@ -691,6 +725,7 @@ async function signOut() {
     const { error } = await authClient.signOut();
     if (error) throw error;
     authUser = null;
+    authError = "";
     authSyncState = "local";
     updateSyncStatus();
     showToast("已退出，当前设备仍保留本机进度");
