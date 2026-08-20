@@ -655,7 +655,7 @@ async function initAuth() {
 }
 function openAuthModal(mode = "login", preserveError = false) {
   authMode = mode;
-  if (!preserveError) authError = "";
+  if (!preserveError && !authUser) authError = "";
   const root = document.getElementById("auth-modal-root");
   if (!root) return;
   root.innerHTML = renderAuthModal();
