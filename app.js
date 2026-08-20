@@ -765,6 +765,37 @@ function formatDate(date) { return date.toLocaleDateString("zh-CN", { month: "nu
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 }
+function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function sourceAnswerValues(task) {
+  return fillBlanks(task).map((blank) => Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)
+    .map((answer) => String(answer || "").trim())
+    .filter((answer) => answer.length >= 2 && answer.length <= 160 && !answer.includes("\n"));
+}
+function renderHighlightedGuideText(value, task) {
+  const text = String(value || "");
+  const tokens = [...new Set(sourceAnswerValues(task).map((answer) => answer.replace(/\s+/g, " ")))]
+    .sort((left, right) => right.length - left.length)
+    .map((answer) => {
+      const compact = answer.replace(/\s+/g, "");
+      return compact ? compact.split("").map((char) => escapeRegExp(char)).join("\\s*") : "";
+    })
+    .filter(Boolean);
+  if (!tokens.length) return escapeHtml(text);
+  let expression;
+  try { expression = new RegExp(tokens.join("|"), "gi"); } catch { return escapeHtml(text); }
+  let cursor = 0;
+  let html = "";
+  text.replace(expression, (match, offset) => {
+    html += escapeHtml(text.slice(cursor, offset));
+    html += `<mark class="answer-highlight">${escapeHtml(match)}</mark>`;
+    cursor = offset + match.length;
+    return match;
+  });
+  return html + escapeHtml(text.slice(cursor));
+}
+function renderAnswerKey() {
+  return `<div class="answer-key"><span class="answer-key-swatch" aria-hidden="true"></span><span>黄色标记 = 原题填空参考答案</span></div>`;
+}
 function normalizeAnswer(value) {
   return String(value || "").toLowerCase().replace(/[\s\u3000，。；：、,.!?！？（）()「」『』“”"‘’'：;!！?？_·]/g, "");
 }
@@ -824,7 +855,7 @@ function renderExactReference(task) {
     });
     return `<div class="exact-reference-line">${line || "&nbsp;"}</div>`;
   }).join("")}</div>` : "";
-  const guideMarkup = section?.reference ? `<details class="guide-reference-inner"><summary>备考指南参考答案全文</summary><pre>${escapeHtml(section.reference)}</pre></details>` : "";
+  const guideMarkup = section?.reference ? `<details class="guide-reference-inner"><summary>备考指南参考答案全文（填空已标记）</summary>${renderAnswerKey()}<div class="guide-reference-text">${renderHighlightedGuideText(section.reference, task)}</div></details>` : "";
   return `<details class="exact-reference"><summary>展开核对版完整参考答案（以素材库为准）</summary>${sourceMarkup}${guideMarkup}</details>`;
 }
 function compactGuideTitle(value) { return String(value).replace(/\s+/g, "").trim(); }
@@ -878,7 +909,7 @@ function renderGuideDetails(task) {
   if (guideError) return `<div class="guide-loading">备考指南原文暂时无法读取：${escapeHtml(guideError)}</div>`;
   const section = guideSections[task.id];
   if (!section) return `<div class="guide-loading">正在读取备考指南原题全文……</div>`;
-  return `<details class="source-details"><summary>查看备考指南原题全文（含空格、文件名和评分要求）</summary><div class="source-content">${escapeHtml(section.question)}</div></details><details class="source-details reference"><summary>查看备考指南参考答案原文</summary><div class="source-content">${escapeHtml(section.reference)}</div></details>`;
+  return `<details class="source-details"><summary>查看备考指南原题全文（含空格、文件名和评分要求）</summary><div class="source-content">${escapeHtml(section.question)}</div></details><details class="source-details reference"><summary>查看备考指南参考答案原文（填空已标记）</summary>${renderAnswerKey()}<div class="source-content guide-reference-text">${renderHighlightedGuideText(section.reference, task)}</div></details>`;
 }
 
 function assetKindLabel(kind) {
@@ -1325,7 +1356,7 @@ function renderFillPractice(task, state) {
     });
     return `<div class="source-line ${block.answers.length ? "has-blank" : ""} ${block.cell ? "source-cell" : ""}">${text}</div>`;
   }).join("")}</div>` : `<div class="blank-list">${blanks.map((blank, index) => { const answer = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer; const control = answer.length > 32 ? `<textarea class="blank-input" data-blank-input="${index}" rows="3" placeholder="填写第 ${index + 1} 空"></textarea>` : `<input class="blank-input" data-blank-input="${index}" placeholder="填写第 ${index + 1} 空" autocomplete="off" />`; return `<article class="blank-item"><div class="blank-number">${index + 1}</div><div class="blank-body"><div class="blank-clue">${escapeHtml(blank.clue)}</div>${control}</div></article>`; }).join("")}</div>`;
-  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>按素材原题逐空填写 · 共 ${blanks.length} 空</strong><span>输入框只放在素材库原下划线或空白单元格的位置；提交后按核对版答案批改。</span></div>${renderSourceNote(task)}${sourceMarkup}${renderSupplementChecks(task)}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">看原题位置</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>原题空位核对答案</h3><div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong>${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</strong></div>`).join("")}</div>${renderExactReference(task)}${renderSelfRate()}</div></div>`;
+  return `<div class="fill-practice" id="fill-practice" data-fill-task="${task.id}"><div class="fill-intro"><strong>按素材原题逐空填写 · 共 ${blanks.length} 空</strong><span>输入框只放在素材库原下划线或空白单元格的位置；提交后按核对版答案批改。</span></div>${renderSourceNote(task)}${sourceMarkup}${renderSupplementChecks(task)}<div class="practice-toolbar"><div class="left"><button class="primary-button" id="grade-fill">提交并批改 <span aria-hidden="true">✓</span></button><button class="hint-button" id="show-one-hint">看原题位置</button></div><div class="right"><span style="color:var(--muted);font-size:10px">本题记录：${state.attempts}次 · 掌握 ${Math.min(2, state.mastered)}/2</span></div></div><div class="fill-results" id="fill-results" aria-live="polite"></div><div class="answer-reveal" id="answer-reveal"><h3>原题空位核对答案</h3>${renderAnswerKey()}<div class="fill-answer-list">${blanks.map((blank, index) => `<div class="fill-answer-row"><span>第 ${index + 1} 空</span><strong><mark class="answer-highlight">${escapeHtml(Array.isArray(blank.answer) ? blank.answer[0] : blank.answer)}</mark></strong></div>`).join("")}</div>${renderExactReference(task)}${renderSelfRate()}</div></div>`;
 }
 
 function renderPractice() {

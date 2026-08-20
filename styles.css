@@ -15,7 +15,7 @@
   --red-soft: #fcebea;
   --shadow: 0 16px 44px rgba(25, 65, 62, 0.08);
   --radius: 10px;
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--paper);
   font-synthesis: none;
@@ -663,4 +663,71 @@ h3 { font-size: 18px; }
   .practice-control { width: 100%; }
   .mode-note { line-height: 1.55; }
   .auth-modal { padding: 25px 20px; }
+}
+
+/* Reader-first practice layout: keep the original paper palette, give the answer area room to breathe. */
+#view-root, .topbar { max-width: 1360px; }
+.main-content { padding: 32px clamp(20px, 3vw, 46px) 72px; }
+.sidebar { width: 220px; flex-basis: 220px; padding-left: 16px; padding-right: 16px; }
+.practice-layout { grid-template-columns: 198px minmax(0, 1fr); gap: 18px; }
+.practice-sidebar { padding: 16px; }
+.question-panel { min-width: 0; overflow: hidden; padding: 26px; }
+.question-panel h2 { font-size: 30px; line-height: 1.42; }
+.question-context { font-size: 15px; }
+.prompt-box { padding: 19px 20px; }
+.prompt-box p { font-size: 17px; line-height: 1.9; }
+.fill-intro { display: flex; align-items: flex-start; flex-direction: column; gap: 6px; }
+.fill-intro strong { font-size: 17px; }
+.fill-intro span, .source-origin { font-size: 14px; line-height: 1.65; }
+.source-code, .exact-reference-content, .source-content { min-width: 0; overflow-x: hidden; }
+.source-code { padding: 17px 18px; font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; font-size: 14px; line-height: 1.95; }
+.source-line, .exact-reference-line { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.source-input { width: min(210px, 100%); min-height: 42px; margin: 3px 4px; padding: 8px 9px; font-size: 14px; line-height: 1.5; vertical-align: middle; }
+.source-input.source-long { width: min(100%, 620px); min-height: 88px; }
+.blank-clue { font-size: 16px; line-height: 1.85; }
+.blank-input { min-height: 46px; padding: 12px 13px; font-size: 16px; }
+.answer-reveal { padding: 19px; }
+.answer-reveal h3 { font-size: 20px; }
+.fill-answer-list { gap: 9px; }
+.fill-answer-row { grid-template-columns: 58px minmax(0, 1fr); gap: 12px; padding: 10px 11px; }
+.fill-answer-row span { font-size: 13px; }
+.fill-answer-row strong { font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
+.exact-reference summary, .source-details summary { padding: 13px 15px; font-size: 14px; }
+.exact-reference-label { padding: 11px 15px; font-size: 13px; line-height: 1.7; }
+.exact-reference-content { padding: 13px 15px; font-size: 14px; line-height: 1.9; }
+.guide-reference-inner { margin: 12px 15px 15px; }
+.guide-reference-inner summary { padding: 11px 13px; font-size: 13px; }
+.guide-reference-text { max-height: 560px; overflow: auto; padding: 15px 16px; border-top: 1px solid #ecdcc8; color: #4b5858; font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 15px; line-height: 2; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.answer-key { display: flex; align-items: center; gap: 7px; margin: 10px 15px 0; color: #765b25; font-size: 13px; line-height: 1.5; }
+.guide-reference-inner .answer-key { margin: 10px 13px 0; }
+.answer-key-swatch { width: 16px; height: 16px; flex: 0 0 auto; border: 1px solid #d2a637; border-radius: 4px; background: #f5d36f; }
+.answer-highlight, .exact-reference-content mark { padding: 2px 5px; border: 1px solid #e0b845; border-radius: 4px; background: #f5d36f; color: #4b3914; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.source-details.reference .answer-key { margin-top: 11px; }
+.practice-toolbar { align-items: center; }
+.practice-toolbar .right { font-size: 13px; }
+.question-nav { padding-top: 21px; }
+
+@media (max-width: 1040px) {
+  .sidebar { width: 204px; flex-basis: 204px; }
+  .practice-layout { grid-template-columns: 1fr; }
+  .practice-sidebar { position: static; }
+  .filter-stack { display: flex; flex-wrap: wrap; }
+  .filter-stack .filter-button { flex: 1 1 170px; }
+}
+
+@media (max-width: 640px) {
+  #app-shell { display: block; }
+  .sidebar { width: 100%; flex-basis: auto; min-height: auto; padding: 15px 16px 12px; border-right: 0; border-bottom: 2px solid var(--ink); }
+  .nav-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 15px; overflow: visible; }
+  .nav-item { flex: none; width: 100%; min-width: 0; padding: 10px 8px; gap: 6px; font-size: 13px; white-space: nowrap; }
+  .nav-icon { width: 22px; flex: 0 0 22px; }
+  .main-content { padding: 23px 14px 48px; }
+  .question-panel { padding: 18px 16px; }
+  .question-panel h2 { font-size: 25px; }
+  .prompt-box p { font-size: 16px; }
+  .source-code { padding: 14px 12px; font-size: 13px; line-height: 1.9; }
+  .source-input, .source-input.source-long { display: block; width: 100%; max-width: 100%; margin: 6px 0; }
+  .source-line { padding-top: 2px; padding-bottom: 2px; }
+  .guide-reference-text { padding: 13px 12px; font-size: 15px; line-height: 1.9; }
+  .answer-key { margin-left: 12px; margin-right: 12px; font-size: 12px; }
 }
