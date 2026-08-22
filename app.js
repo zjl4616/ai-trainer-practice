@@ -456,6 +456,7 @@ Object.assign(FILL_BLANKS, CODE_FILL_BLANKS);
 const SOURCE_DATA = (typeof window !== "undefined" && window.SOURCE_BLANKS) || {};
 const TASK_ASSETS = (typeof window !== "undefined" && window.TASK_ASSETS) || {};
 const SOURCE_ANSWER_NOTES = (typeof window !== "undefined" && window.SOURCE_ANSWER_NOTES) || {};
+const NEW_CORPUS_AUDIT = (typeof window !== "undefined" && window.NEW_CORPUS_AUDIT) || { tasks: {}, notes: {} };
 
 const ACTION_CARDS = [
   ["2.1 数据处理", "读 → 看 → 清 → 删 → 变 → 选 → 分 → 存", "看到缺失、重复、标准化、目标列、测试集 20% 就触发。"],
@@ -472,6 +473,8 @@ let activeSessionTasks = [...TASKS];
 let practiceMode = "fill";
 let sessionOrder = "sequence";
 let sessionFromMistakes = false;
+let reviewFilter = "all";
+let reviewOrder = "sequence";
 let timerId = null;
 let remainingSeconds = 20 * 60;
 let guideSections = {};
@@ -510,8 +513,9 @@ function saveProgress() {
   }
   updateSyncStatus();
 }
-function taskState(id) { return progress[id] || { attempts: 0, hard: 0, okay: 0, mastered: 0, last: null, error: "" }; }
+function taskState(id) { return progress[id] || { attempts: 0, hard: 0, okay: 0, mastered: 0, last: null, error: "", reviewedAt: null, reviewedUpdatedAt: null }; }
 function reviewedCount() { return Object.values(progress).filter((x) => x.attempts > 0).length; }
+function reviewMarkedCount() { return Object.values(progress).filter((x) => x.reviewedAt).length; }
 function hardCount() { return Object.values(progress).filter((x) => x.hard > 0 && x.mastered < x.hard).length; }
 function moduleTasks(id) { return TASKS.filter((task) => task.module === id); }
 function mergeProgress(local, remote) {
@@ -529,7 +533,19 @@ function mergeProgress(local, remote) {
       okay: Math.max(left.okay || 0, right.okay || 0),
       mastered: Math.max(left.mastered || 0, right.mastered || 0),
       last: latest.last || left.last || right.last || null,
-      error: latest.error || left.error || right.error || ""
+      error: latest.error || left.error || right.error || "",
+      reviewedAt: (() => {
+        const leftReviewTime = Date.parse(left.reviewedUpdatedAt || left.reviewedAt || "") || 0;
+        const rightReviewTime = Date.parse(right.reviewedUpdatedAt || right.reviewedAt || "") || 0;
+        if (leftReviewTime === 0 && rightReviewTime === 0) return latest.reviewedAt || left.reviewedAt || right.reviewedAt || null;
+        return (rightReviewTime > leftReviewTime ? right : left).reviewedAt || null;
+      })(),
+      reviewedUpdatedAt: (() => {
+        const leftReviewTime = Date.parse(left.reviewedUpdatedAt || left.reviewedAt || "") || 0;
+        const rightReviewTime = Date.parse(right.reviewedUpdatedAt || right.reviewedAt || "") || 0;
+        const newest = Math.max(leftReviewTime, rightReviewTime);
+        return newest ? new Date(newest).toISOString() : null;
+      })()
     };
   });
   return merged;
@@ -795,6 +811,56 @@ function renderHighlightedGuideText(value, task) {
 }
 function renderAnswerKey() {
   return `<div class="answer-key"><span class="answer-key-swatch" aria-hidden="true"></span><span>黄色标记 = 原题填空参考答案</span></div>`;
+}
+function auditTask(task) { return NEW_CORPUS_AUDIT.tasks?.[task.id] || {}; }
+function auditStatusLabel(task) {
+  const status = auditTask(task).status;
+  if (status === "corrected") return "已按新资料修正";
+  if (status === "verified-with-workbook") return "已核对题面 · 答案在工作簿";
+  return "新资料逐项核对";
+}
+function reviewAnswerTerms(task) {
+  const answers = fillBlanks(task).flatMap((blank) => {
+    const value = Array.isArray(blank.answer) ? blank.answer[0] : blank.answer;
+    return String(value || "").split(/\n+/);
+  });
+  return [...new Set([...answers, ...(task.triggers || [])].map((value) => String(value || "").trim()).filter((value) => value.length >= 2 && value.length <= 900))]
+    .sort((left, right) => right.length - left.length);
+}
+function renderHighlightedReviewText(value, task) {
+  const text = String(value || "");
+  const tokens = reviewAnswerTerms(task).map((answer) => answer.replace(/\s+/g, "").split("").map((char) => escapeRegExp(char)).join("\\s*")).filter(Boolean);
+  if (!tokens.length) return escapeHtml(text);
+  let expression;
+  try { expression = new RegExp(tokens.join("|"), "gi"); } catch { return escapeHtml(text); }
+  let cursor = 0;
+  let html = "";
+  text.replace(expression, (match, offset) => {
+    html += escapeHtml(text.slice(cursor, offset));
+    html += `<mark class="answer-highlight">${escapeHtml(match)}</mark>`;
+    cursor = offset + match.length;
+    return match;
+  });
+  return html + escapeHtml(text.slice(cursor));
+}
+function renderVerifiedNotebook(task, audit) {
+  const source = sourceBlocks(task);
+  if (!source) return `<div class="review-answer-document">${renderHighlightedReviewText(audit.referenceText || task.answer, task)}</div>`;
+  const blocks = Array.isArray(source) ? source : source.blocks || [];
+  return `<div class="review-code-label">新资料参考答案 Notebook · 填空位置已用黄色标出</div><pre class="review-code">${blocks.map((block) => {
+    let line = escapeHtml(block.text);
+    block.answers.forEach((answer, slot) => {
+      const value = Array.isArray(answer) ? answer[0] : answer;
+      line = line.replace(`{{${slot}}}`, `<mark class="answer-highlight">${escapeHtml(value)}</mark>`);
+    });
+    return line || " ";
+  }).join("\n")}</pre>`;
+}
+function renderReviewAnswer(task) {
+  const audit = auditTask(task);
+  const body = audit.kind === "notebook" ? renderVerifiedNotebook(task, audit) : `<div class="review-answer-document">${renderHighlightedReviewText(audit.referenceText || task.answer, task)}</div>`;
+  const note = audit.note?.body || sourceAnswerNote(task)?.body || "";
+  return `<div class="review-answer-panel">${renderAnswerKey()}<div class="review-answer-status"><span>${auditStatusLabel(task)}</span><small>${escapeHtml(audit.answer || task.source || "")}</small></div>${body}${note ? `<div class="review-answer-note"><strong>核对提示</strong><span>${escapeHtml(note)}</span></div>` : ""}</div>`;
 }
 function normalizeAnswer(value) {
   return String(value || "").toLowerCase().replace(/[\s\u3000，。；：、,.!?！？（）()「」『』“”"‘’'：;!！?？_·]/g, "");
@@ -1241,13 +1307,15 @@ function renderAuthSlot() {
 function setRoute(route) {
   currentRoute = route;
   document.querySelectorAll("[data-route]").forEach((button) => button.classList.toggle("active", button.dataset.route === route && button.classList.contains("nav-item")));
-  const titles = { dashboard: "练习总览", practice: practiceMode === "fill" ? "逐空填答" : "先回忆，再看答案", modules: "章节练习", mistakes: "错题复做", plan: "复习计划" };
+  const titles = { dashboard: "练习总览", practice: practiceMode === "fill" ? "逐空填答" : "先回忆，再看答案", modules: "章节练习", mistakes: "错题复做", review: "复习背诵", plan: "复习计划" };
   document.getElementById("page-title").textContent = titles[route] || titles.dashboard;
   render();
 }
 function updateShell() {
   document.getElementById("sidebar-countdown").textContent = daysLeft() > 0 ? `还剩 ${daysLeft()} 天` : "今天考试";
   document.getElementById("mistake-count").textContent = hardCount();
+  const reviewCount = document.getElementById("review-count");
+  if (reviewCount) reviewCount.textContent = reviewMarkedCount();
   document.getElementById("top-eyebrow").textContent = `今日训练 · ${new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}`;
   const status = document.getElementById("sync-status");
   if (status) status.innerHTML = `<span class="status-dot ${authUser && authSyncState === "error" ? "status-error" : ""}"></span><span>${authStatusText()}</span>`;
@@ -1261,6 +1329,7 @@ function render() {
   if (currentRoute === "practice") root.innerHTML = renderPractice();
   else if (currentRoute === "modules") root.innerHTML = renderModules();
   else if (currentRoute === "mistakes") root.innerHTML = renderMistakes();
+  else if (currentRoute === "review") root.innerHTML = renderReview();
   else if (currentRoute === "plan") root.innerHTML = renderPlan();
   else root.innerHTML = renderDashboard();
   if (currentRoute === "practice") {
@@ -1375,6 +1444,42 @@ function renderPractice() {
 }
 
 function formatTimer(seconds) { const min = Math.floor(seconds / 60).toString().padStart(2, "0"); const sec = (seconds % 60).toString().padStart(2, "0"); return `${min}:${sec}`; }
+function reviewPool() {
+  const pool = reviewFilter === "all" ? TASKS : moduleTasks(reviewFilter);
+  return reviewOrder === "random" ? shuffleTasks(pool) : [...pool];
+}
+function reviewCard(task) {
+  const state = taskState(task.id);
+  const module = MODULES.find((item) => item.id === task.module);
+  const marked = Boolean(state.reviewedAt);
+  const audit = auditTask(task);
+  const reviewAssets = audit.kind === "workbook" ? renderTaskAssets(task) : "";
+  return `<article class="review-card ${marked ? "marked" : ""}" data-review-card="${task.id}">
+    <div class="review-card-top"><span class="question-id">${task.id}</span><span class="review-module">${escapeHtml(module?.title || "")}</span><span class="review-status ${marked ? "done" : "pending"}">${marked ? "已复习" : "待复习"}</span></div>
+    <div class="review-question"><span class="eyebrow">题目</span><h3>${escapeHtml(task.title)}</h3><p>${escapeHtml(task.prompt)}</p><small>${escapeHtml(task.context)}</small></div>
+    <details class="review-answer-details"><summary><span>展开参考答案</span><span class="review-summary-hint">${escapeHtml(audit.kind === "workbook" ? "先看要点，再打开工作簿" : "填空和关键短语已高亮")}</span></summary>${renderReviewAnswer(task)}</details>${reviewAssets}
+    <div class="review-card-actions"><button class="small-button ${marked ? "review-toggle-done" : ""}" data-review-toggle="${task.id}">${marked ? "取消已复习" : "标记已复习"}</button><button class="outline-button" data-start-task="${task.id}">去逐空练习 <span aria-hidden="true">→</span></button></div>
+  </article>`;
+}
+function renderReview() {
+  const tasks = reviewPool();
+  const marked = reviewMarkedCount();
+  const filterLabel = reviewFilter === "all" ? "全部章节" : (MODULES.find((item) => item.id === reviewFilter)?.title || "当前章节");
+  const auditSummary = NEW_CORPUS_AUDIT.summary || {};
+  const corrected = auditSummary.corrected ?? auditSummary.statuses?.corrected ?? 0;
+  const verifiedWithWorkbook = auditSummary.verifiedWithWorkbook ?? auditSummary.statuses?.verifiedWithWorkbook ?? 0;
+  return `<div class="view-heading"><div><span class="eyebrow">新资料核对版 · 复习背诵</span><h2 style="margin-top:7px">先看题目，展开答案背诵</h2><p>答案来自“人工智能3级操作题new”对应参考文件。Notebook 逐空答案和 DOCX 参考全文已嵌入网页；表格题保留下载入口，便于边看边核对。</p></div><div class="view-actions"><button class="primary-button" data-review-open-all>全部展开答案</button><button class="outline-button" data-review-close-all>全部收起</button></div></div><section class="review-toolbar"><div class="review-filter-group"><span class="mode-label">章节</span><button class="mode-button ${reviewFilter === "all" ? "active" : ""}" data-review-filter="all">全部 · ${TASKS.length}</button>${MODULES.map((module) => `<button class="mode-button ${reviewFilter === module.id ? "active" : ""}" data-review-filter="${module.id}">${escapeHtml(module.title)} · ${moduleTasks(module.id).length}</button>`).join("")}</div><div class="review-filter-group"><span class="mode-label">顺序</span><button class="mode-button ${reviewOrder === "sequence" ? "active" : ""}" data-review-order="sequence">按资料顺序</button><button class="mode-button ${reviewOrder === "random" ? "active" : ""}" data-review-order="random">随机复习</button></div></section><div class="review-summary"><strong>${escapeHtml(filterLabel)} · ${tasks.length} 题</strong><span>已标记 ${marked} / ${TASKS.length} 题</span><span class="review-summary-source">${corrected} 题已按新增资料修正 · ${verifiedWithWorkbook} 题需打开工作簿核对</span></div><section class="review-list">${tasks.map(reviewCard).join("")}</section>`;
+}
+function toggleReviewMarked(taskId) {
+  const state = taskState(taskId);
+  const now = new Date().toISOString();
+  state.reviewedAt = state.reviewedAt ? null : now;
+  state.reviewedUpdatedAt = now;
+  progress[taskId] = state;
+  saveProgress();
+  showToast(state.reviewedAt ? "已标记为复习完成" : "已取消复习标记");
+  render();
+}
 function renderMistakes() {
   const mistakes = TASKS.filter((task) => { const state = taskState(task.id); return state.hard > 0 && state.mastered < state.hard; });
   return `<div class="view-heading"><div><span class="eyebrow">间隔复习</span><h2 style="margin-top:7px">把卡住的空位变成下一次提示</h2><p>错题记录只在本机保存。先逐空复做最弱的一题，再去刷新题。</p></div><div class="view-actions"><button class="primary-button" data-route="practice" data-mistakes="true">开始错题复做 <span aria-hidden="true">→</span></button></div></div><div class="mistake-grid">${mistakes.length ? mistakes.map((task) => { const state = taskState(task.id); const module = MODULES.find((item) => item.id === task.module); return `<article class="mistake-row"><span class="id">${task.id}</span><div><strong>${task.title}</strong><p>${module.title} · ${state.error ? `${state.error} 类卡点 · ` : ""}已错 ${state.hard} 次，掌握 ${Math.min(2, state.mastered)}/2</p></div><div class="last">${state.last ? `上次 ${formatDate(new Date(state.last))}` : "待复做"}<br/><button class="small-button" data-review-id="${task.id}">复做</button></div></article>`; }).join("") : `<div class="panel empty-state"><strong>还没有错题记录</strong><p>开始一轮逐空训练，自评“不会”或“模糊”的题会出现在这里。</p><button class="primary-button" style="margin-top:15px" data-route="practice">去做第一题 <span aria-hidden="true">→</span></button></div>`}</div>`;
@@ -1478,6 +1583,21 @@ function bindEvents() {
       startSession(button.dataset.fill === "true" ? "all" : (button.dataset.focus || "all"), button.dataset.mistakes === "true", button.dataset.practiceMode || "fill", "sequence");
     } else setRoute(button.dataset.route);
   }));
+  document.querySelectorAll("[data-review-filter]").forEach((button) => button.addEventListener("click", () => {
+    reviewFilter = button.dataset.reviewFilter || "all";
+    render();
+  }));
+  document.querySelectorAll("[data-review-order]").forEach((button) => button.addEventListener("click", () => {
+    reviewOrder = button.dataset.reviewOrder === "random" ? "random" : "sequence";
+    render();
+  }));
+  document.querySelectorAll("[data-review-open-all]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll(".review-answer-details").forEach((details) => { details.open = true; });
+  }));
+  document.querySelectorAll("[data-review-close-all]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll(".review-answer-details").forEach((details) => { details.open = false; });
+  }));
+  document.querySelectorAll("[data-review-toggle]").forEach((button) => button.addEventListener("click", () => toggleReviewMarked(button.dataset.reviewToggle)));
   document.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.filter, false, "fill", "sequence")));
   document.querySelectorAll("[data-start-module]").forEach((button) => button.addEventListener("click", () => startSession(button.dataset.startModule, false, "fill", "sequence")));
   document.querySelectorAll("[data-start-task]").forEach((button) => button.addEventListener("click", () => startSingleTask(button.dataset.startTask)));
