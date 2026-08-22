@@ -458,6 +458,14 @@ const TASK_ASSETS = (typeof window !== "undefined" && window.TASK_ASSETS) || {};
 const SOURCE_ANSWER_NOTES = (typeof window !== "undefined" && window.SOURCE_ANSWER_NOTES) || {};
 const NEW_CORPUS_AUDIT = (typeof window !== "undefined" && window.NEW_CORPUS_AUDIT) || { tasks: {}, notes: {} };
 
+function liveWindowData(name, fallback) {
+  return (typeof window !== "undefined" && window[name]) || fallback;
+}
+function sourceData() { return liveWindowData("SOURCE_BLANKS", SOURCE_DATA); }
+function taskAssets() { return liveWindowData("TASK_ASSETS", TASK_ASSETS); }
+function sourceNotes() { return liveWindowData("SOURCE_ANSWER_NOTES", SOURCE_ANSWER_NOTES); }
+function corpusAudit() { return liveWindowData("NEW_CORPUS_AUDIT", NEW_CORPUS_AUDIT); }
+
 const ACTION_CARDS = [
   ["2.1 数据处理", "读 → 看 → 清 → 删 → 变 → 选 → 分 → 存", "看到缺失、重复、标准化、目标列、测试集 20% 就触发。"],
   ["2.2 算法测试", "读 → 选 → 分 → 训 → 存 → 测 → 评 → 改", "指标后面必须跟错误原因和重训动作。"],
@@ -812,7 +820,7 @@ function renderHighlightedGuideText(value, task) {
 function renderAnswerKey() {
   return `<div class="answer-key"><span class="answer-key-swatch" aria-hidden="true"></span><span>黄色标记 = 原题填空参考答案</span></div>`;
 }
-function auditTask(task) { return NEW_CORPUS_AUDIT.tasks?.[task.id] || {}; }
+function auditTask(task) { return corpusAudit().tasks?.[task.id] || {}; }
 function auditStatusLabel(task) {
   const status = auditTask(task).status;
   if (status === "corrected") return "已按新资料修正";
@@ -882,7 +890,7 @@ function blankMatches(input, blank) {
 }
 function hasFillMode(task) { return Boolean(sourceBlocks(task)); }
 function fillTaskCount() { return TASKS.filter((task) => hasFillMode(task)).length; }
-function sourceBlocks(task) { return SOURCE_DATA[task?.id]?.blocks || null; }
+function sourceBlocks(task) { return sourceData()[task?.id]?.blocks || null; }
 function fillBlanks(task) {
   const source = sourceBlocks(task);
   if (source) {
@@ -896,7 +904,7 @@ function fillBlanks(task) {
   }
   return [];
 }
-function sourceAnswerNote(task) { return SOURCE_ANSWER_NOTES[task?.id] || null; }
+function sourceAnswerNote(task) { return sourceNotes()[task?.id] || null; }
 function extraChecks(task) { return sourceAnswerNote(task)?.checks || []; }
 function renderSourceNote(task) {
   const note = sourceAnswerNote(task);
@@ -983,7 +991,7 @@ function assetKindLabel(kind) {
 }
 function assetFileName(asset) { return asset.name.split("/").pop(); }
 function renderTaskAssets(task) {
-  const assets = TASK_ASSETS[task.id] || [];
+  const assets = taskAssets()[task.id] || [];
   if (!assets.length) return "";
   const rows = assets.map((asset, index) => {
     const preview = asset.kind === "csv" ? `<button class="asset-preview-button" data-preview-csv="${escapeHtml(asset.href)}" data-preview-id="asset-preview-${task.id}-${index}">预览表格</button>` : "";
@@ -1128,7 +1136,7 @@ async function loadPyodideRuntime(onStatus = () => {}) {
 }
 async function loadTaskPythonFiles(taskId) {
   const task = TASKS.find((item) => item.id === taskId);
-  const assets = pythonAssetCandidates(TASK_ASSETS[taskId] || []);
+  const assets = pythonAssetCandidates(taskAssets()[taskId] || []);
   if (!task || !assets.length) {
     pythonStatus(taskId, "请先上传文件", "error");
     return;
@@ -1234,7 +1242,7 @@ function clearPythonOutput(taskId) {
 }
 function resetPythonCode(taskId) {
   const task = TASKS.find((item) => item.id === taskId);
-  const assets = TASK_ASSETS[taskId] || [];
+  const assets = taskAssets()[taskId] || [];
   const editor = document.querySelector("[data-python-editor='" + taskId + "']");
   if (!task || !editor) return;
   const stored = pythonCodeMap();
@@ -1335,7 +1343,7 @@ function render() {
   if (currentRoute === "practice") {
     const task = activeSessionTasks[currentTaskIndex] || TASKS[0];
     const assetPanel = root.querySelector(".asset-panel");
-    if (assetPanel) assetPanel.insertAdjacentHTML("afterend", renderPythonLab(task, TASK_ASSETS[task.id] || []));
+    if (assetPanel) assetPanel.insertAdjacentHTML("afterend", renderPythonLab(task, taskAssets()[task.id] || []));
   }
   if (currentRoute === "practice" && practiceMode === "fill") {
     const fillCopy = root.querySelector(".view-heading p");
@@ -1414,7 +1422,7 @@ function renderRecallPractice(task, state) {
 
 function renderFillPractice(task, state) {
   const blanks = fillBlanks(task);
-  const source = SOURCE_DATA[task.id];
+  const source = sourceData()[task.id];
   const sourceMarkup = source ? `<div class="source-origin">素材库原题 · ${escapeHtml(source.sourceFile)}</div><div class="source-code">${source.blocks.map((block, blockIndex) => {
     const offset = source.blocks.slice(0, blockIndex).reduce((sum, item) => sum + item.answers.length, 0);
     const text = escapeHtml(block.text).replace(/\{\{(\d+)\}\}/g, (_, localSlot) => {
@@ -1465,7 +1473,7 @@ function renderReview() {
   const tasks = reviewPool();
   const marked = reviewMarkedCount();
   const filterLabel = reviewFilter === "all" ? "全部章节" : (MODULES.find((item) => item.id === reviewFilter)?.title || "当前章节");
-  const auditSummary = NEW_CORPUS_AUDIT.summary || {};
+  const auditSummary = corpusAudit().summary || {};
   const corrected = auditSummary.corrected ?? auditSummary.statuses?.corrected ?? 0;
   const verifiedWithWorkbook = auditSummary.verifiedWithWorkbook ?? auditSummary.statuses?.verifiedWithWorkbook ?? 0;
   return `<div class="view-heading"><div><span class="eyebrow">新资料核对版 · 复习背诵</span><h2 style="margin-top:7px">先看题目，展开答案背诵</h2><p>答案来自“人工智能3级操作题new”对应参考文件。Notebook 逐空答案和 DOCX 参考全文已嵌入网页；表格题保留下载入口，便于边看边核对。</p></div><div class="view-actions"><button class="primary-button" data-review-open-all>全部展开答案</button><button class="outline-button" data-review-close-all>全部收起</button></div></div><section class="review-toolbar"><div class="review-filter-group"><span class="mode-label">章节</span><button class="mode-button ${reviewFilter === "all" ? "active" : ""}" data-review-filter="all">全部 · ${TASKS.length}</button>${MODULES.map((module) => `<button class="mode-button ${reviewFilter === module.id ? "active" : ""}" data-review-filter="${module.id}">${escapeHtml(module.title)} · ${moduleTasks(module.id).length}</button>`).join("")}</div><div class="review-filter-group"><span class="mode-label">顺序</span><button class="mode-button ${reviewOrder === "sequence" ? "active" : ""}" data-review-order="sequence">按资料顺序</button><button class="mode-button ${reviewOrder === "random" ? "active" : ""}" data-review-order="random">随机复习</button></div></section><div class="review-summary"><strong>${escapeHtml(filterLabel)} · ${tasks.length} 题</strong><span>已标记 ${marked} / ${TASKS.length} 题</span><span class="review-summary-source">${corrected} 题已按新增资料修正 · ${verifiedWithWorkbook} 题需打开工作簿核对</span></div><section class="review-list">${tasks.map(reviewCard).join("")}</section>`;
